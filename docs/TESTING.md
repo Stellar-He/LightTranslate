@@ -1,43 +1,92 @@
-# Testing
+# 开发与测试
 
-## Automated checks
+## 构建、自检与打包
+
+在 Windows 上使用 PowerShell 7 和 .NET Framework 4.8 的 64 位编译器：
 
 ```powershell
 pwsh -File .\build.ps1
 pwsh -File .\scripts\download-dictionary.ps1
 pwsh -File .\scripts\test.ps1
+```
+
+构建产物位于 `dist\LightTranslate`，下载的词库源文件保存在 `cache`。
+词库脚本使用固定版本的 ECDICT，验证 SHA-256 后生成索引。
+
+默认自检在本地运行，覆盖词库查询、剪贴板快照、终端与语言过滤、原生密码控件识别、
+请求取消、对象回收和浮层窗口样式。它会创建自己的测试控件并渲染浮层，
+不会显示窗口或向其他桌面应用注入输入。
+
+测试在线服务：
+
+```powershell
 pwsh -File .\scripts\test.ps1 -Online
 ```
 
-The default test does not send network requests. It creates its own password/plain
-controls and renders a bubble without showing it or injecting desktop input.
-The online test sends three fixed example sentences, not the user's selection.
-Results are written under `dist/LightTranslate` and are excluded from Git.
+在线自检发送三句固定示例文字。结果写入输出目录的 `self-test.json`；
+运行日志为 `status.log`，两者均被 Git 忽略。
 
-## Manual checks
+生成带词库、许可证和默认设置的便携包：
 
-Record Windows version, app version and the selected application's process name.
+```powershell
+pwsh -File .\scripts\package.ps1 -Version 0.1.0-alpha.1
+```
 
-1. Drag-select a word, double-click a word, and select with Shift + arrow keys.
-2. Select a sentence while online, and query a dictionary word while offline.
-3. Check that typing, scrolling outside the bubble, clicking elsewhere and switching
-   applications dismiss the bubble without changing the application's focus.
-4. Hover and scroll a long translation inside the bubble.
-5. Before a selection, copy plain text, HTML, an image and file-drop content; verify
-   the original content is still available afterward.
-6. Copy something else while a translation is pending; verify it is not overwritten.
-7. Quickly make several selections; verify an older response does not replace the
-   current selection's result.
-8. Test terminal and password fields, user-configured excluded applications, DPI
-   changes, multiple monitors and monitor edges.
-9. Leave the application running for several hours and verify after restarting Windows.
+GitHub Actions 会执行编译、词库构建和离线自检，并上传构建产物。
 
-## Current evidence
+## 配置字段
 
-The installed prototype was manually confirmed to show translations in the user's
-Codex desktop environment. Earlier clipboard capture was also confirmed in Chrome.
-The published source includes the fix removing native UIAutomationClient handles
-after an observed access violation in UIAutomationCore's finalizer.
+修改应用目录的 `settings.json`，重启后生效。
 
-Claude desktop compatibility, restart behavior, extended uptime and a full
-multi-monitor matrix remain unverified. CI checks do not prove those behaviors.
+| 字段 | 默认值 | 作用 |
+|---|---|---|
+| `Enabled` | `true` | 自动划词翻译开关，也可通过托盘修改 |
+| `ClipboardFallback` | `true` | 剪贴板取词开关，关闭后停止取词 |
+| `Target` | `zh-Hans` | 微软接口的目标语言；本地词库和腾讯备用接口输出中文 |
+| `MaxSelectionLength` | `2000` | 单次选区字符数上限 |
+| `ExcludedApps` | `[]` | 排除的进程名称，可带或不带 `.exe` |
+| `Diagnostics` | `false` | 触发诊断日志开关 |
+
+`ClipboardFallback` 沿用早期字段名，当前取词路径统一使用剪贴板。
+
+## 取词与数据处理
+
+程序使用带内部标记的 `Ctrl+C` 获取选区，并尝试保存、恢复原剪贴板的各格式。
+如果用户或其他应用在取词期间更新了剪贴板，程序会避免覆盖新的内容。
+系统剪贴板历史和第三方剪贴板管理器仍可能保留临时复制记录。
+
+命中本地词库的选区不会发送给在线服务。其他文字发送给微软，主服务失败时可能发送给腾讯。
+启动时会预热微软连接，该请求不包含选区文字。在线接口采用兼容协议，当前无需个人 API 密钥；
+接口可用性由服务端决定，可能出现限流或协议变更。
+
+译文缓存最多 256 条，仅保存在当前进程内。程序不记录选区原文或用户译文。
+诊断日志启用后会记录进程名、进程编号、字符数和触发状态；启动错误日志可能包含本机路径。
+
+## 兼容性记录
+
+首个版本已在开发者的 Codex 桌面环境中手动确认划词显示。早期剪贴板取词也在 Chrome 中验证过。
+Windows 本地编译、离线自检、在线翻译测试及首次 GitHub Actions 构建均通过。
+
+取词实现已经移除 UIAutomationClient 句柄；此前测试发现 UIAutomationCore 的原生对象回收会触发访问冲突。
+后续兼容性验证重点为 Claude 桌面应用、长时间运行、多显示器及重启后的自启动。
+
+取词依赖应用支持复制选区。原生密码编辑框和已识别的终端进程会被跳过；
+网页或自绘密码字段依赖应用本身的复制规则，嵌入其他应用的终端需要单独验证。
+从普通权限进程获取管理员应用的选区受 Windows 权限限制。
+
+当前功能聚焦划词阅读：本地词库可离线，句子翻译使用网络。
+OCR、朗读、翻译历史、原位替换、AI 润色、图形设置、自动更新、安装器和代码签名暂未实现。
+
+## 手动验证清单
+
+记录 Windows 版本、轻译版本和目标应用的进程名称。
+
+1. 拖选、双击选词，以及 Shift + 方向键选择文字。
+2. 在线选择句子，断网后查询词库中的单词。
+3. 打字、滚动外部页面、点击外部和切换应用，检查浮层隐藏及输入焦点。
+4. 在浮层上悬停，滚动长译文。
+5. 预先复制文本、HTML、图片和文件，检查取词后的剪贴板内容。
+6. 翻译等待期间复制其他内容，检查新的剪贴板内容。
+7. 连续快速选择不同文字，检查旧响应是否影响当前译文。
+8. 检查终端、密码框、排除应用、多显示器、DPI 和屏幕边缘。
+9. 持续运行数小时，并在重启 Windows 后检查自启动与划词。
