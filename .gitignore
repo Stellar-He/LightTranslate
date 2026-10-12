@@ -1,0 +1,14 @@
+/cache/
+/dist/
+*.exe
+*.pdb
+*.zip
+*.sha256
+lexicon.dat
+lexicon.idx
+dictionary-build.txt
+settings.json
+status.log
+self-test.json
+.vs/
+*.user

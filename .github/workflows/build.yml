@@ -1,0 +1,44 @@
+name: Windows build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build application
+        shell: pwsh
+        run: ./build.ps1
+      - name: Fetch and build pinned dictionary
+        shell: pwsh
+        run: ./scripts/download-dictionary.ps1
+      - name: Run offline self-test
+        shell: pwsh
+        run: ./scripts/test.ps1
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: LightTranslate-windows-x64
+          path: |
+            dist/LightTranslate/LightTranslate.exe
+            dist/LightTranslate/LightTranslate.exe.config
+            dist/LightTranslate/LightTranslate.ico
+            dist/LightTranslate/lexicon.dat
+            dist/LightTranslate/lexicon.idx
+            dist/LightTranslate/settings.json
+            dist/LightTranslate/startup.ps1
+            dist/LightTranslate/LICENSE
+            dist/LightTranslate/README.md
+            dist/LightTranslate/THIRD_PARTY_NOTICES.md
+            dist/LightTranslate/licenses/
+            dist/LightTranslate/assets/
+            dist/LightTranslate/docs/
+            dist/LightTranslate/settings.example.json

@@ -1,0 +1,8 @@
+{
+  "Enabled": true,
+  "ClipboardFallback": true,
+  "Target": "zh-Hans",
+  "MaxSelectionLength": 2000,
+  "ExcludedApps": [],
+  "Diagnostics": false
+}
