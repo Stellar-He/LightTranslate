@@ -73,7 +73,7 @@ pwsh -File .\scripts\download-dictionary.ps1
 构建结果位于 `dist\LightTranslate`。词库下载固定版本，并校验 SHA-256。
 配置细节、自检、打包和兼容性记录见 [开发与测试](docs/TESTING.md)。
 
-当前版本：[v0.1.0-alpha.1](https://github.com/qhmiao/LightTranslate/releases/tag/v0.1.0-alpha.1)。
+当前版本：[v0.1.0-alpha.2](https://github.com/qhmiao/LightTranslate/releases/tag/v0.1.0-alpha.2)。
 欢迎通过 [Issues](https://github.com/qhmiao/LightTranslate/issues) 分享使用反馈。
 
 ## 许可证与致谢

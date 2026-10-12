@@ -17,6 +17,9 @@ pwsh -File .\scripts\test.ps1
 请求取消、对象回收和浮层窗口样式。它会创建自己的测试控件并渲染浮层，
 不会显示窗口或向其他桌面应用注入输入。
 
+输入监听回归测试会阻塞 UI 调度器，检查独立监听线程仍能处理消息；
+随后移除本进程的原生监听，检查恢复机制自动重新安装，并确认捕获的消息交回 UI 调度器。
+
 测试在线服务：
 
 ```powershell
@@ -29,7 +32,7 @@ pwsh -File .\scripts\test.ps1 -Online
 生成带词库、许可证和默认设置的便携包：
 
 ```powershell
-pwsh -File .\scripts\package.ps1 -Version 0.1.0-alpha.1
+pwsh -File .\scripts\package.ps1 -Version 0.1.0-alpha.2
 ```
 
 GitHub Actions 会执行编译、词库构建和离线自检，并上传构建产物。
@@ -37,6 +40,7 @@ GitHub Actions 会执行编译、词库构建和离线自检，并上传构建�
 ## 配置字段
 
 修改应用目录的 `settings.json`，重启后生效。
+`Diagnostics` 开关每两秒读取一次，可在排查后直接关闭，无需重启。
 
 | 字段 | 默认值 | 作用 |
 |---|---|---|
@@ -69,6 +73,12 @@ Windows 本地编译、离线自检、在线翻译测试及首次 GitHub Actions
 
 取词实现已经移除 UIAutomationClient 句柄；此前测试发现 UIAutomationCore 的原生对象回收会触发访问冲突。
 后续兼容性验证重点为 Claude 桌面应用、长时间运行、多显示器及重启后的自启动。
+
+0.1.0-alpha.2 将鼠标和键盘监听移至独立消息线程，回调只捕获输入并排队，
+复制选区、跨进程检查和界面操作由 UI 线程执行。监听会在系统恢复、会话切换、
+检测到输入与回调不一致时重新安装，并每 30 秒在鼠标按钮释放时刷新。
+修复版已在 Codex 中再次手动确认显示译文。
+Windows 的低级监听超时机制见 [Microsoft 文档](https://learn.microsoft.com/en-us/windows/win32/winmsg/lowlevelmouseproc)。
 
 取词依赖应用支持复制选区。原生密码编辑框和已识别的终端进程会被跳过；
 网页或自绘密码字段依赖应用本身的复制规则，嵌入其他应用的终端需要单独验证。
