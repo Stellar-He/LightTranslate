@@ -88,7 +88,7 @@ namespace LightTranslate
 
                 var target = new Settings { Enabled = false, ClipboardFallback = false, Target = "fr", ExcludedApps = new[] { "KeepMe" } };
                 int saved = 0;
-                var window = new ReadingSettingsWindow(target, delegate { saved++; });
+                var window = new SettingsWindow(target, delegate { saved++; }, new FakeStartupRegistration());
                 window.RenderPreview(Path.Combine(Program.Folder, "reading-settings-preview.png"));
                 window.SetInputForTest("9", "", "10", "50"); Check(!window.Apply(path), "invalid font blocked");
                 window.SetInputForTest("14", "#GGGGGG", "10", "50"); Check(!window.Apply(path), "invalid background blocked");
@@ -99,14 +99,17 @@ namespace LightTranslate
                 Check(!window.Apply(Path.Combine(directory, "missing", "settings.json")), "unwritable destination reported");
                 Check(saved == 0 && target.BubbleBackground == "", "write failure does not apply settings");
                 window.RenderPreview(Path.Combine(Program.Folder, "reading-settings-error-preview.png"));
-                window.Fill(new Settings { BubbleFontFamily = "Segoe UI", BubbleFontSize = 18, BubbleBackground = "#25282F", AutoHideSeconds = 10, MinEnglishPercent = 60 });
+                var customized = target.Clone();
+                customized.BubbleFontFamily = "Segoe UI"; customized.BubbleFontSize = 18;
+                customized.BubbleBackground = "#25282F"; customized.AutoHideSeconds = 10; customized.MinEnglishPercent = 60;
+                window.Fill(customized);
                 window.RenderPreview(Path.Combine(Program.Folder, "reading-settings-custom-preview.png"));
                 Check(window.Apply(path) && saved == 1, "valid GUI save succeeds");
                 var roundTrip = Settings.Load(path);
                 Check(roundTrip.BubbleFontFamily == "Segoe UI" && roundTrip.BubbleFontSize == 18 && roundTrip.BubbleBackground == "#25282F" && roundTrip.AutoHideSeconds == 10 && roundTrip.MinEnglishPercent == 60, "font family and reading settings persisted");
                 Check(!roundTrip.Enabled && !roundTrip.ClipboardFallback && roundTrip.Target == "fr" && roundTrip.ExcludedApps[0] == "KeepMe", "GUI preserves unrelated settings");
                 Check(target.BubbleFontSize == 18 && target.MinEnglishPercent == 60, "live settings updated");
-                var cancel = new ReadingSettingsWindow(target, null);
+                var cancel = new SettingsWindow(target, null, new FakeStartupRegistration());
                 cancel.Fill(new Settings()); cancel.Close();
                 Check(target.BubbleFontSize == 18 && Settings.Load(path).MinEnglishPercent == 60, "reset preview and cancel do not save");
                 results["readingSettings"] = "legacy load, defaults, invalid values, validation, atomic save, live apply and cancel passed; window previews rendered without showing windows";

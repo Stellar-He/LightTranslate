@@ -89,6 +89,7 @@ namespace LightTranslate
         public string BubbleBackground = "";
         public int AutoHideSeconds = 0;
         public int MinEnglishPercent = 0;
+        internal event Action Changed;
         public static Settings Load()
         { return Load(Path.Combine(Program.Folder, "settings.json")); }
         internal static Settings Load(string path)
@@ -120,6 +121,20 @@ namespace LightTranslate
             BubbleFontFamily = other.BubbleFontFamily; BubbleFontSize = other.BubbleFontSize;
             BubbleBackground = other.BubbleBackground; AutoHideSeconds = other.AutoHideSeconds;
             MinEnglishPercent = other.MinEnglishPercent;
+        }
+        internal void CopyUserFrom(Settings other)
+        {
+            Enabled = other.Enabled; ClipboardFallback = other.ClipboardFallback;
+            Target = other.Target; MaxSelectionLength = other.MaxSelectionLength;
+            ExcludedApps = other.ExcludedApps == null ? null : (string[])other.ExcludedApps.Clone();
+            CopyReadingFrom(other);
+            if (Changed != null) Changed();
+        }
+        internal bool TrySetEnabled(bool enabled, string path)
+        {
+            var next = Clone(); next.Enabled = enabled;
+            if (!next.TrySave(path)) return false;
+            CopyUserFrom(next); return true;
         }
         public void Save()
         { TrySave(Path.Combine(Program.Folder, "settings.json")); }
@@ -156,7 +171,7 @@ namespace LightTranslate
         private IntPtr downWindow, sourceWindow;
         private uint lastUpTime;
         private readonly BubbleLifetime lifetime = new BubbleLifetime();
-        private ReadingSettingsWindow readingSettings;
+        private SettingsWindow settingsWindow;
         private readonly Queue<string> diagnosticQueue = new Queue<string>();
         private long mouseEvents, mouseDowns, mouseUps, selections;
         private DateTime nextHeartbeat, nextHealthLog, nextSettingsCheck;
@@ -173,9 +188,18 @@ namespace LightTranslate
             tray = new Forms.NotifyIcon { Text = "轻译 · 选中即译", Icon = MakeIcon(), Visible = true };
             var menu = new Forms.ContextMenuStrip();
             enabledItem = new Forms.ToolStripMenuItem("自动划词翻译") { Checked = settings.Enabled, CheckOnClick = true };
-            enabledItem.Click += delegate { settings.Enabled = enabledItem.Checked; settings.Save(); Dismiss(true); };
+            enabledItem.Click += delegate
+            {
+                if (!settings.TrySetEnabled(enabledItem.Checked, Path.Combine(Program.Folder, "settings.json")))
+                {
+                    enabledItem.Checked = settings.Enabled;
+                    tray.ShowBalloonTip(4000, "轻译", "无法保存自动翻译开关，请检查应用目录是否可写。", Forms.ToolTipIcon.Error);
+                    return;
+                }
+                Dismiss(true);
+            };
             menu.Items.Add(enabledItem);
-            menu.Items.Add("阅读设置…", null, delegate { OpenReadingSettings(); });
+            menu.Items.Add("设置…", null, delegate { OpenSettings(); });
             menu.Items.Add("打开设置文件", null, delegate { Process.Start("notepad.exe", Path.Combine(Program.Folder, "settings.json")); });
             menu.Items.Add(new Forms.ToolStripSeparator());
             menu.Items.Add("退出轻译", null, delegate { app.Shutdown(); });
@@ -189,13 +213,17 @@ namespace LightTranslate
             Program.Log("started", "hooks=dedicated-thread recovery=enabled capture=clipboard dictionary=" + lexicon.Count);
         }
 
-        private void OpenReadingSettings()
+        private void OpenSettings()
         {
             Dismiss(true);
-            if (readingSettings != null) { readingSettings.Activate(); return; }
-            readingSettings = new ReadingSettingsWindow(settings, delegate { Dismiss(true); bubble.ApplySettings(settings); });
-            readingSettings.Closed += delegate { readingSettings = null; };
-            readingSettings.Show();
+            if (settingsWindow != null)
+            {
+                if (settingsWindow.WindowState == WindowState.Minimized) settingsWindow.WindowState = WindowState.Normal;
+                settingsWindow.Activate(); return;
+            }
+            settingsWindow = new SettingsWindow(settings, delegate { enabledItem.Checked = settings.Enabled; Dismiss(true); bubble.ApplySettings(settings); });
+            settingsWindow.Closed += delegate { settingsWindow = null; };
+            settingsWindow.Show();
         }
 
         internal static System.Drawing.Icon MakeIcon()
@@ -412,7 +440,7 @@ namespace LightTranslate
             tray.Visible = false;
             tray.Icon.Dispose();
             tray.Dispose();
-            if (readingSettings != null) readingSettings.Close();
+            if (settingsWindow != null) settingsWindow.Close();
             bubble.Close();
             translator.Dispose();
             lexicon.Dispose();
@@ -1170,6 +1198,7 @@ namespace LightTranslate
             results["clipboardSnapshot"] = "text + HTML preserved";
             results["guards"] = "terminal + language passed";
             ReadingSettingsTests.Run(results);
+            UnifiedSettingsTests.Run(results);
             Program.Log("self-test", "dictionary and clipboard snapshot passed");
             if (System.Reflection.Assembly.GetExecutingAssembly().GetReferencedAssemblies().Any(a => a.Name == "UIAutomationClient"))
                 throw new Exception("Unsafe UIA client dependency remains");

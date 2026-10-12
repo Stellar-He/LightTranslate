@@ -90,23 +90,32 @@ namespace LightTranslate
         { return Luminance(background) < 0.35 ? Color.FromArgb(38, 255, 255, 255) : Color.FromArgb(35, 40, 48, 64); }
     }
 
-    internal sealed class ReadingSettingsWindow : Window
+    internal sealed class SettingsWindow : Window
     {
         private const string Automatic = "自动（按译文长度）";
+        private static readonly string[] Languages = {
+            "简体中文 · zh-Hans", "繁体中文 · zh-Hant", "英语 · en", "日语 · ja", "韩语 · ko",
+            "法语 · fr", "德语 · de", "西班牙语 · es", "俄语 · ru"
+        };
         private readonly Settings settings;
         private readonly Action saved;
-        private readonly ComboBox fontFamily, fontSize, autoHide;
-        private readonly TextBox background, englishPercent;
-        private readonly TextBlock error, previewText;
+        private readonly IStartupRegistration startup;
+        private readonly CheckBox enabled, clipboard, autoStart;
+        private readonly ComboBox language, fontFamily, fontSize, autoHide;
+        private readonly TextBox maxSelection, excludedApps, background, englishPercent;
+        private readonly TextBlock error, previewText, startupStatus;
         private readonly Border preview;
         private readonly Grid layout;
+        private readonly TabControl tabs;
+        private bool refreshingStartup, startupDirty;
+        private bool? observedStartup;
 
-        internal ReadingSettingsWindow(Settings settings, Action saved)
+        internal SettingsWindow(Settings settings, Action saved, IStartupRegistration startup = null)
         {
-            this.settings = settings;
-            this.saved = saved;
-            Title = "轻译 · 阅读设置";
-            Width = 560; Height = 760; MinWidth = 460; MinHeight = 450;
+            this.settings = settings; this.saved = saved;
+            this.startup = startup ?? StartupRegistration.CurrentUser();
+            Title = "轻译 · 设置";
+            Width = 620; Height = 790; MinWidth = 480; MinHeight = 450;
             MaxHeight = Math.Max(450, SystemParameters.WorkArea.Height - 40);
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             FontFamily = new FontFamily("Microsoft YaHei UI"); FontSize = 14;
@@ -117,46 +126,67 @@ namespace LightTranslate
             layout.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             Content = layout;
             var header = new StackPanel { Margin = new Thickness(24, 20, 24, 16) };
-            header.Children.Add(new TextBlock { Text = "阅读设置", FontSize = 22, FontWeight = FontWeights.SemiBold, Foreground = Ink() });
-            header.Children.Add(Help("保存后立即生效。预览仅使用示例文字。"));
+            header.Children.Add(new TextBlock { Text = "轻译设置", FontSize = 22, FontWeight = FontWeights.SemiBold, Foreground = Ink() });
+            header.Children.Add(Help("保存后生效；取消保留当前配置和开机自启状态。"));
             layout.Children.Add(header);
+            tabs = new TabControl { Margin = new Thickness(20, 0, 20, 0) };
+            Grid.SetRow(tabs, 1); layout.Children.Add(tabs);
 
-            var form = new StackPanel { Margin = new Thickness(24, 0, 24, 16) };
-            var scroll = new ScrollViewer { Content = form, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
-            Grid.SetRow(scroll, 1); layout.Children.Add(scroll);
-            form.Children.Add(Heading("浮层外观"));
+            var translation = NewTab("翻译");
+            enabled = Toggle("自动划词翻译");
+            clipboard = Toggle("通过剪贴板获取选中文字");
+            translation.Children.Add(enabled); translation.Children.Add(clipboard);
+            translation.Children.Add(Help("托盘开关立即生效并同步到这里；面板修改在保存后生效。取词会临时复制选区并尝试恢复剪贴板，关闭取词后不获取选区。"));
+            language = new ComboBox { IsEditable = true, ItemsSource = Languages, MinHeight = 32 };
+            AddField(translation, "目标语言（微软）", language);
+            translation.Children.Add(Help("可直接输入语言代码，如 en、ja。该选项只用于微软在线翻译；本地词库和腾讯备用仍输出中文。"));
+            maxSelection = Input();
+            AddField(translation, "选区字符数上限", maxSelection);
+            translation.Children.Add(Help("正整数，默认 2,000。超过上限只提示分段选择，不发送该选区。"));
+            excludedApps = new TextBox { AcceptsReturn = true, MinHeight = 82, MaxHeight = 100, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            AddField(translation, "排除应用", excludedApps);
+            translation.Children.Add(Help("每行一个进程名，也可用逗号或分号分隔，如 SomeApp 或 SomeApp.exe；不要填写路径。"));
+            englishPercent = Input();
+            AddField(translation, "最低英文占比（%）", englishPercent);
+            translation.Children.Add(Help("0–100%。A–Z/a–z 字母数 ÷ 全部文字字母数；中文及其他语言计入分母，标点、空白、数字不计。Hello中文约为 71%。"));
+            translation.Children.Add(Help("0% 保留原语言过滤；纯中文和没有字母的选区仍跳过。大于 0% 时必须含 A–Z/a–z。"));
+
+            var appearance = NewTab("浮层");
+            appearance.Children.Add(Heading("外观"));
             fontFamily = new ComboBox { ItemsSource = Fonts.SystemFontFamilies.Select(f => f.Source).OrderBy(x => x).ToArray(), MinHeight = 32 };
-            AddField(form, "字体", fontFamily);
+            AddField(appearance, "字体", fontFamily);
             fontSize = new ComboBox { IsEditable = true, ItemsSource = new[] { "10", "12", "14", "16", "18", "20", "24", "32", "48" }, MinHeight = 32 };
-            AddField(form, "字号", fontSize);
-            background = new TextBox { MinHeight = 32, VerticalContentAlignment = VerticalAlignment.Center };
+            AddField(appearance, "字号", fontSize);
+            background = Input();
             var colorRow = new Grid();
-            colorRow.ColumnDefinitions.Add(new ColumnDefinition());
-            colorRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            colorRow.ColumnDefinitions.Add(new ColumnDefinition()); colorRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             colorRow.Children.Add(background);
             var pick = Button("选色…"); pick.Margin = new Thickness(8, 0, 0, 0); Grid.SetColumn(pick, 1);
             AutomationProperties.SetName(pick, "选择浮层背景色");
             pick.Click += delegate { PickColor(); }; colorRow.Children.Add(pick);
-            AddField(form, "背景色", colorRow);
-            AutomationProperties.SetName(background, "浮层背景色");
-            form.Children.Add(Help("留空跟随系统明暗主题，或填写 #RRGGBB。文字颜色自动保持对比度。"));
+            AddField(appearance, "背景色", colorRow); AutomationProperties.SetName(background, "浮层背景色");
+            appearance.Children.Add(Help("留空跟随系统明暗主题，或填写 #RRGGBB。文字颜色自动保持对比度。"));
             previewText = new TextBlock { Text = "译文会使用这个字体和背景。\nSelect text to translate.", TextWrapping = TextWrapping.Wrap };
-            preview = new Border
-            {
+            preview = new Border {
                 Padding = new Thickness(15, 10, 15, 11), Margin = new Thickness(0, 12, 0, 20), CornerRadius = new CornerRadius(11),
                 BorderThickness = new Thickness(1), MinHeight = 82, MaxHeight = 180,
                 Child = new ScrollViewer { Content = previewText, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }
             };
-            AutomationProperties.SetName(preview, "浮层外观示例预览"); form.Children.Add(preview);
-
-            form.Children.Add(Heading("显示与触发"));
+            AutomationProperties.SetName(preview, "浮层外观示例预览"); appearance.Children.Add(preview);
+            appearance.Children.Add(Heading("停留时间"));
             autoHide = new ComboBox { IsEditable = true, ItemsSource = new[] { Automatic, "3", "6", "10", "15", "30", "60", "120" }, MinHeight = 32 };
-            AddField(form, "自动消失（秒）", autoHide);
-            form.Children.Add(Help("译文自动停留 6–22 秒，也可填 1–120 秒。悬停时续时，移远或继续操作仍会提前收起；等待和错误提示保留原时长。"));
-            englishPercent = new TextBox { MinHeight = 32, VerticalContentAlignment = VerticalAlignment.Center };
-            AddField(form, "最低英文占比（%）", englishPercent);
-            form.Children.Add(Help("0–100%。A–Z/a–z 字母数 ÷ 所有文字字母数；中文及其他语言计入分母，标点、空白、数字不计。Hello中文约为 71%。"));
-            form.Children.Add(Help("0% 关闭比例限制，保留原有语言过滤；纯中文和没有字母的选区仍不触发。大于 0% 时必须含 A–Z/a–z。"));
+            AddField(appearance, "自动消失（秒）", autoHide);
+            appearance.Children.Add(Help("译文自动停留 6–22 秒，也可填 1–120 秒。悬停时续时，移远或继续操作仍会提前收起；等待和错误提示保留原时长。"));
+
+            var launch = NewTab("启动");
+            launch.Children.Add(Heading("登录 Windows 后启动"));
+            autoStart = Toggle("开机自启（仅当前用户）"); launch.Children.Add(autoStart);
+            startupStatus = Help(""); startupStatus.Margin = new Thickness(0, 0, 0, 14); launch.Children.Add(startupStatus);
+            var refresh = Button("刷新启动状态"); refresh.HorizontalAlignment = HorizontalAlignment.Left;
+            refresh.Click += delegate { RefreshStartup(); }; launch.Children.Add(refresh);
+            launch.Children.Add(Help("只有修改此选项并保存时才创建或移除当前目录的启动快捷方式。不会提权，不使用服务或计划任务，也不会修改 Windows 的审批或防护设置。"));
+            launch.Children.Add(Help("若存在指向其他副本的同名启动项，或 Windows 已禁用它，会提示原因并保留原状态。移动便携目录后，请检查原启动项。"));
+
             AutomationProperties.SetHelpText(fontSize, "范围 10 到 48，默认 14，随系统缩放");
             AutomationProperties.SetHelpText(background, "留空跟随系统主题，或输入不透明六位十六进制颜色 #RRGGBB");
             AutomationProperties.SetHelpText(autoHide, "自动，或 1 到 120 秒；鼠标悬停保留浮层");
@@ -166,8 +196,9 @@ namespace LightTranslate
             error = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(180, 35, 24)), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10), Visibility = Visibility.Collapsed };
             AutomationProperties.SetName(error, "设置错误"); footer.Children.Add(error);
             var actions = new Grid(); actions.ColumnDefinitions.Add(new ColumnDefinition()); actions.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            var reset = Button("恢复阅读默认值"); reset.HorizontalAlignment = HorizontalAlignment.Left;
-            reset.Click += delegate { Fill(new Settings()); error.Visibility = Visibility.Collapsed; }; actions.Children.Add(reset);
+            var reset = Button("恢复配置默认值"); reset.HorizontalAlignment = HorizontalAlignment.Left;
+            AutomationProperties.SetHelpText(reset, "只恢复配置输入，不改变开机自启选择；保存后才生效");
+            reset.Click += delegate { Fill(new Settings()); }; actions.Children.Add(reset);
             var right = new StackPanel { Orientation = Orientation.Horizontal };
             var cancel = Button("取消"); cancel.Click += delegate { Close(); }; right.Children.Add(cancel);
             var save = Button("保存"); save.IsDefault = true; save.Margin = new Thickness(8, 0, 0, 0);
@@ -178,16 +209,29 @@ namespace LightTranslate
             fontFamily.SelectionChanged += delegate { UpdatePreview(); };
             fontSize.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent, new TextChangedEventHandler(delegate { UpdatePreview(); }));
             background.TextChanged += delegate { UpdatePreview(); };
+            autoStart.Checked += delegate { StartupChoiceChanged(); }; autoStart.Unchecked += delegate { StartupChoiceChanged(); };
             PreviewKeyDown += delegate(object sender, KeyEventArgs e) { if (e.Key == Key.Escape) { e.Handled = true; Close(); } };
-            Fill(settings);
+            settings.Changed += SyncEnabled;
+            Closed += delegate { settings.Changed -= SyncEnabled; };
+            Activated += delegate { RefreshStartup(); };
+            Fill(settings); RefreshStartup();
+        }
+        private StackPanel NewTab(string name)
+        {
+            var form = new StackPanel { Margin = new Thickness(16, 16, 16, 20) };
+            tabs.Items.Add(new TabItem { Header = name, Content = new ScrollViewer { Content = form, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled } });
+            return form;
         }
         private static Brush Ink() { return new SolidColorBrush(Color.FromRgb(36, 40, 48)); }
         private static TextBlock Help(string text)
-        { return new TextBlock { Text = text, Foreground = new SolidColorBrush(Color.FromRgb(83, 91, 105)), FontSize = 12, LineHeight = 19, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 0) }; }
+        { return new TextBlock { Text = text, Foreground = new SolidColorBrush(Color.FromRgb(83, 91, 105)), FontSize = 12, LineHeight = 19, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 6) }; }
         private static TextBlock Heading(string text)
         { return new TextBlock { Text = text, FontWeight = FontWeights.SemiBold, Foreground = Ink(), Margin = new Thickness(0, 0, 0, 10) }; }
         private static Button Button(string text)
         { return new Button { Content = text, Padding = new Thickness(14, 7, 14, 7), MinHeight = 32, MinWidth = 64 }; }
+        private static TextBox Input() { return new TextBox { MinHeight = 32, VerticalContentAlignment = VerticalAlignment.Center }; }
+        private static CheckBox Toggle(string text)
+        { return new CheckBox { Content = text, VerticalContentAlignment = VerticalAlignment.Center, MinHeight = 30, Margin = new Thickness(0, 0, 0, 4) }; }
         private static void AddField(Panel form, string label, FrameworkElement control)
         {
             var row = new Grid { Margin = new Thickness(0, 0, 0, 10) };
@@ -195,9 +239,16 @@ namespace LightTranslate
             row.Children.Add(new Label { Content = label, Target = control, Padding = new Thickness(0, 5, 8, 0), Foreground = Ink() });
             AutomationProperties.SetName(control, label); Grid.SetColumn(control, 1); row.Children.Add(control); form.Children.Add(row);
         }
+        private static string LanguageLabel(string code)
+        { return Languages.FirstOrDefault(x => x.EndsWith(" · " + code, StringComparison.Ordinal)) ?? code ?? ""; }
+        private static string AppsText(string[] apps) { return apps == null ? "" : string.Join("\n", apps); }
         internal void Fill(Settings value)
         {
             if (error != null) error.Visibility = Visibility.Collapsed;
+            enabled.IsChecked = value.Enabled; clipboard.IsChecked = value.ClipboardFallback;
+            language.Text = LanguageLabel(value.Target);
+            maxSelection.Text = value.MaxSelectionLength.ToString(CultureInfo.CurrentCulture);
+            excludedApps.Text = AppsText(value.ExcludedApps);
             fontFamily.SelectedItem = BubbleAppearance.ResolveFont(value.BubbleFontFamily).Source;
             fontSize.Text = value.BubbleFontSize.ToString(CultureInfo.CurrentCulture);
             background.Text = value.BubbleBackground;
@@ -205,6 +256,7 @@ namespace LightTranslate
             englishPercent.Text = value.MinEnglishPercent.ToString(CultureInfo.CurrentCulture);
             UpdatePreview();
         }
+        private void SyncEnabled() { enabled.IsChecked = settings.Enabled; }
         private void UpdatePreview()
         {
             if (preview == null) return;
@@ -222,53 +274,112 @@ namespace LightTranslate
             {
                 Color color;
                 if (BubbleAppearance.TryParseBackground(background.Text, out color)) dialog.Color = System.Drawing.Color.FromArgb(color.R, color.G, color.B);
-                var handle = new System.Windows.Interop.WindowInteropHelper(this).Handle;
-                var owner = new Forms.NativeWindow();
-                owner.AssignHandle(handle);
-                try
-                {
+                var owner = new Forms.NativeWindow(); owner.AssignHandle(new System.Windows.Interop.WindowInteropHelper(this).Handle);
+                try {
                     if (dialog.ShowDialog(owner) == Forms.DialogResult.OK)
                         background.Text = string.Format(CultureInfo.InvariantCulture, "#{0:X2}{1:X2}{2:X2}", dialog.Color.R, dialog.Color.G, dialog.Color.B);
                 }
                 finally { owner.ReleaseHandle(); }
             }
         }
+        private void StartupChoiceChanged()
+        {
+            if (refreshingStartup) return;
+            startupDirty = autoStart.IsChecked != observedStartup;
+            RefreshStartup();
+        }
+        internal void RefreshStartup()
+        {
+            var state = startup.Read();
+            refreshingStartup = true;
+            try {
+                autoStart.IsEnabled = state.CanChoose;
+                if (!startupDirty) { observedStartup = state.Enabled; autoStart.IsThreeState = state.Enabled == null; autoStart.IsChecked = state.Enabled; }
+                startupStatus.Text = state.Message + (startupDirty ? (autoStart.IsChecked == true ? "\n待保存：开启开机自启。" : "\n待保存：关闭开机自启。") : "");
+            }
+            finally { refreshingStartup = false; }
+        }
+        private void RefreshAfterFailure()
+        { startupDirty = false; RefreshStartup(); }
         internal bool Apply(string path)
         {
-            double size; int seconds, percent; Color color;
+            double size; int seconds, percent, length; Color color;
             if (!double.TryParse(fontSize.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out size) || double.IsNaN(size) || double.IsInfinity(size) || size < 10 || size > 48)
-                return Invalid("字号请输入 10–48 之间的数字。", fontSize);
+                return Invalid("字号请输入 10–48 之间的数字。", fontSize, 1);
             if (!string.IsNullOrWhiteSpace(background.Text) && !BubbleAppearance.TryParseBackground(background.Text, out color))
-                return Invalid("背景色请留空，或填写 #RRGGBB，例如 #25282F。", background);
+                return Invalid("背景色请留空，或填写 #RRGGBB，例如 #25282F。", background, 1);
             if (autoHide.Text.Trim() == Automatic || autoHide.Text.Trim() == "0") seconds = 0;
             else if (!int.TryParse(autoHide.Text.Trim(), out seconds) || seconds < 1 || seconds > 120)
-                return Invalid("自动消失时间请选择“自动”，或填写 1–120 秒。", autoHide);
+                return Invalid("自动消失时间请选择“自动”，或填写 1–120 秒。", autoHide, 1);
             if (!int.TryParse(englishPercent.Text.Trim(), out percent) || percent < 0 || percent > 100)
-                return Invalid("最低英文占比请输入 0–100 的整数百分比。", englishPercent);
+                return Invalid("最低英文占比请输入 0–100 的整数百分比。", englishPercent, 0);
             var next = settings.Clone();
+            next.Enabled = enabled.IsChecked == true; next.ClipboardFallback = clipboard.IsChecked == true;
+            if (language.Text != LanguageLabel(settings.Target))
+            {
+                string choice = Languages.FirstOrDefault(x => x == language.Text);
+                string code = choice == null ? language.Text.Trim() : choice.Substring(choice.LastIndexOf(" · ", StringComparison.Ordinal) + 3);
+                if (!System.Text.RegularExpressions.Regex.IsMatch(code, "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$"))
+                    return Invalid("请选择目标语言，或输入语言代码，例如 zh-Hans、en、ja。", language, 0);
+                next.Target = code;
+            }
+            if (maxSelection.Text != settings.MaxSelectionLength.ToString(CultureInfo.CurrentCulture))
+            {
+                if (!int.TryParse(maxSelection.Text.Trim(), out length) || length < 1)
+                    return Invalid("选区字符数上限请输入正整数，例如 2000。", maxSelection, 0);
+                next.MaxSelectionLength = length;
+            }
+            if (excludedApps.Text != AppsText(settings.ExcludedApps))
+            {
+                string[] apps = excludedApps.Text.Split(new[] { '\r', '\n', ',', ';', '，', '；' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).Where(x => x.Length != 0).ToArray();
+                if (apps.Any(x => x.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || Path.GetFileNameWithoutExtension(x).Length == 0))
+                    return Invalid("排除应用请填写进程名称，不要包含路径或通配符。", excludedApps, 0);
+                next.ExcludedApps = apps.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            }
             next.BubbleFontFamily = BubbleAppearance.ResolveFont(fontFamily.SelectedItem as string).Source;
             next.BubbleFontSize = size; next.BubbleBackground = background.Text.Trim().ToUpperInvariant();
             next.AutoHideSeconds = seconds; next.MinEnglishPercent = percent;
-            if (!next.TrySave(path)) return Invalid("无法保存设置。请检查应用目录是否可写；当前设置未改变。", null);
-            settings.CopyReadingFrom(next);
+            Action rollback = null; string startupError;
+            if (startupDirty && !startup.TrySet(autoStart.IsChecked == true, out rollback, out startupError))
+            {
+                RefreshAfterFailure(); return Invalid(startupError, autoStart, 2);
+            }
+            if (!next.TrySave(path))
+            {
+                string message = "无法保存设置。请检查应用目录是否可写；当前配置未改变。";
+                if (rollback != null)
+                {
+                    try { rollback(); }
+                    catch { message += " 启动项恢复失败，请检查“启动”页显示的实际状态。"; }
+                }
+                RefreshAfterFailure(); return Invalid(message, null, rollback == null ? tabs.SelectedIndex : 2);
+            }
+            settings.CopyUserFrom(next);
             if (saved != null) saved();
             Close(); return true;
         }
-        private bool Invalid(string message, Control control)
+        private bool Invalid(string message, Control control, int tab)
         {
-            error.Text = message; error.Visibility = Visibility.Visible;
+            tabs.SelectedIndex = tab; error.Text = message; error.Visibility = Visibility.Visible;
             AutomationProperties.SetHelpText(this, message);
-            if (IsVisible && control != null) control.Focus();
+            if (IsVisible && control != null) { control.BringIntoView(); control.Focus(); }
             return false;
         }
-        internal void RenderPreview(string file)
+        internal void RenderPreview(string file, int tab = 1)
         {
-            layout.Measure(new Size(540, 725)); layout.Arrange(new Rect(0, 0, 540, 725)); layout.UpdateLayout();
-            var bitmap = new RenderTargetBitmap(540, 725, 96, 96, PixelFormats.Pbgra32); bitmap.Render(layout);
+            tabs.SelectedIndex = tab;
+            layout.Measure(new Size(600, 740)); layout.Arrange(new Rect(0, 0, 600, 740)); layout.UpdateLayout();
+            var bitmap = new RenderTargetBitmap(600, 740, 96, 96, PixelFormats.Pbgra32); bitmap.Render(layout);
             var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
             using (var stream = File.Create(file)) encoder.Save(stream);
         }
         internal void SetInputForTest(string size, string color, string seconds, string percent)
         { fontSize.Text = size; background.Text = color; autoHide.Text = seconds; englishPercent.Text = percent; }
+        internal void SetBehaviorForTest(bool on, bool capture, string target, string maximum, string apps)
+        { enabled.IsChecked = on; clipboard.IsChecked = capture; language.Text = target; maxSelection.Text = maximum; excludedApps.Text = apps; }
+        internal void SetStartupForTest(bool value) { autoStart.IsChecked = value; }
+        internal bool EnabledForTest { get { return enabled.IsChecked == true; } }
+        internal bool? StartupForTest { get { return autoStart.IsChecked; } }
+        internal string ErrorForTest { get { return error.Text; } }
     }
 }
