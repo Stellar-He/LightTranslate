@@ -14,11 +14,12 @@ $references = @('System.dll','System.Core.dll','System.Net.Http.dll','System.Dra
     ForEach-Object { '/r:' + (Join-Path $framework $_) }
 $references += @('WindowsBase.dll','PresentationCore.dll','PresentationFramework.dll') |
     ForEach-Object { '/r:' + (Join-Path $framework ('WPF\' + $_)) }
+$sourceFiles = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src') -Filter '*.cs' -File | ForEach-Object { $_.FullName })
 & $compiler /nologo /target:winexe /platform:x64 /optimize+ `
     ('/out:' + (Join-Path $outputPath 'LightTranslate.exe')) `
     ('/win32manifest:' + (Join-Path $PSScriptRoot 'src\LightTranslate.manifest')) `
     ('/win32icon:' + (Join-Path $PSScriptRoot 'assets\LightTranslate.ico')) `
-    @references (Join-Path $PSScriptRoot 'src\LightTranslate.cs')
+    @references @sourceFiles
 if ($LASTEXITCODE -ne 0) { throw 'Compilation failed.' }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'src\LightTranslate.exe.config'),
     (Join-Path $PSScriptRoot 'LICENSE'), (Join-Path $PSScriptRoot 'README.md'),

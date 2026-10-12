@@ -84,20 +84,57 @@ namespace LightTranslate
         public int MaxSelectionLength = 2000;
         public string[] ExcludedApps = new string[0];
         public bool Diagnostics = false;
+        public string BubbleFontFamily = "Microsoft YaHei UI";
+        public double BubbleFontSize = 14;
+        public string BubbleBackground = "";
+        public int AutoHideSeconds = 0;
+        public int MinEnglishPercent = 0;
         public static Settings Load()
+        { return Load(Path.Combine(Program.Folder, "settings.json")); }
+        internal static Settings Load(string path)
         {
             try
             {
-                var path = Path.Combine(Program.Folder, "settings.json");
-                if (File.Exists(path)) return new JavaScriptSerializer().Deserialize<Settings>(File.ReadAllText(path));
+                if (File.Exists(path))
+                {
+                    var loaded = new JavaScriptSerializer().Deserialize<Settings>(File.ReadAllText(path));
+                    if (loaded != null) { loaded.NormalizeReading(); return loaded; }
+                }
             }
             catch { }
             return new Settings();
         }
-        public void Save()
+        internal void NormalizeReading()
         {
-            try { File.WriteAllText(Path.Combine(Program.Folder, "settings.json"), new JavaScriptSerializer().Serialize(this), Encoding.UTF8); }
-            catch { }
+            BubbleFontFamily = BubbleAppearance.ResolveFont(BubbleFontFamily).Source;
+            if (double.IsNaN(BubbleFontSize) || double.IsInfinity(BubbleFontSize) || BubbleFontSize < 10 || BubbleFontSize > 48) BubbleFontSize = 14;
+            Color color;
+            BubbleBackground = BubbleAppearance.TryParseBackground(BubbleBackground, out color) ? BubbleBackground.Trim().ToUpperInvariant() : "";
+            if (AutoHideSeconds < 0 || AutoHideSeconds > 120) AutoHideSeconds = 0;
+            if (MinEnglishPercent < 0 || MinEnglishPercent > 100) MinEnglishPercent = 0;
+        }
+        internal Settings Clone()
+        { return new JavaScriptSerializer().Deserialize<Settings>(new JavaScriptSerializer().Serialize(this)); }
+        internal void CopyReadingFrom(Settings other)
+        {
+            BubbleFontFamily = other.BubbleFontFamily; BubbleFontSize = other.BubbleFontSize;
+            BubbleBackground = other.BubbleBackground; AutoHideSeconds = other.AutoHideSeconds;
+            MinEnglishPercent = other.MinEnglishPercent;
+        }
+        public void Save()
+        { TrySave(Path.Combine(Program.Folder, "settings.json")); }
+        internal bool TrySave(string path)
+        {
+            string temporary = path + ".tmp-" + Guid.NewGuid().ToString("N");
+            try
+            {
+                File.WriteAllText(temporary, new JavaScriptSerializer().Serialize(this), Encoding.UTF8);
+                if (File.Exists(path)) File.Replace(temporary, path, null);
+                else File.Move(temporary, path);
+                return true;
+            }
+            catch { return false; }
+            finally { try { if (File.Exists(temporary)) File.Delete(temporary); } catch { } }
         }
     }
 
@@ -118,8 +155,8 @@ namespace LightTranslate
         private Native.POINT downPoint, previousUp, anchor;
         private IntPtr downWindow, sourceWindow;
         private uint lastUpTime;
-        private DateTime shownAt, awayAt;
-        private int displaySeconds;
+        private readonly BubbleLifetime lifetime = new BubbleLifetime();
+        private ReadingSettingsWindow readingSettings;
         private readonly Queue<string> diagnosticQueue = new Queue<string>();
         private long mouseEvents, mouseDowns, mouseUps, selections;
         private DateTime nextHeartbeat, nextHealthLog, nextSettingsCheck;
@@ -132,11 +169,13 @@ namespace LightTranslate
             translator = new Translator();
             var warming = translator.WarmConnection();
             bubble = new Bubble();
+            bubble.ApplySettings(settings);
             tray = new Forms.NotifyIcon { Text = "轻译 · 选中即译", Icon = MakeIcon(), Visible = true };
             var menu = new Forms.ContextMenuStrip();
             enabledItem = new Forms.ToolStripMenuItem("自动划词翻译") { Checked = settings.Enabled, CheckOnClick = true };
             enabledItem.Click += delegate { settings.Enabled = enabledItem.Checked; settings.Save(); Dismiss(true); };
             menu.Items.Add(enabledItem);
+            menu.Items.Add("阅读设置…", null, delegate { OpenReadingSettings(); });
             menu.Items.Add("打开设置文件", null, delegate { Process.Start("notepad.exe", Path.Combine(Program.Folder, "settings.json")); });
             menu.Items.Add(new Forms.ToolStripSeparator());
             menu.Items.Add("退出轻译", null, delegate { app.Shutdown(); });
@@ -148,6 +187,15 @@ namespace LightTranslate
             timer.Tick += delegate { CheckDismissal(); FlushDiagnostics(); };
             timer.Start();
             Program.Log("started", "hooks=dedicated-thread recovery=enabled capture=clipboard dictionary=" + lexicon.Count);
+        }
+
+        private void OpenReadingSettings()
+        {
+            Dismiss(true);
+            if (readingSettings != null) { readingSettings.Activate(); return; }
+            readingSettings = new ReadingSettingsWindow(settings, delegate { Dismiss(true); bubble.ApplySettings(settings); });
+            readingSettings.Closed += delegate { readingSettings = null; };
+            readingSettings.Show();
         }
 
         internal static System.Drawing.Icon MakeIcon()
@@ -243,7 +291,7 @@ namespace LightTranslate
             generation++;
             if (pending != null) { pending.Cancel(); pending = null; }
             if (bubble.IsVisible) bubble.Dismiss(immediate);
-            awayAt = DateTime.MinValue;
+            lifetime.Reset();
         }
 
         private async void BeginSelection(IntPtr window, Native.POINT point)
@@ -274,7 +322,7 @@ namespace LightTranslate
                 Trace("clipboard chars=" + (text == null ? 0 : text.Length));
                 if (!Valid(version, window) || string.IsNullOrWhiteSpace(text)) { Trace("selection discarded valid=" + Valid(version, window)); return; }
                 text = text.Trim();
-                if (!SelectionReader.HasForeignText(text)) { Trace("Chinese-only selection skipped"); return; }
+                if (!SelectionReader.ShouldTranslate(text, settings.MinEnglishPercent)) { Trace("selection language threshold skipped"); return; }
                 anchor = point;
                 sourceWindow = window;
                 if (text.Length > settings.MaxSelectionLength)
@@ -285,7 +333,7 @@ namespace LightTranslate
                 string translated = lexicon.Lookup(text);
                 if (translated != null || translator.TryCached(text, settings.Target, out translated))
                 {
-                    ShowText(translated, point, ReadingSeconds(translated));
+                    ShowText(translated, point, ReadingSeconds(translated), true);
                     return;
                 }
                 var request = translator.Translate(text, settings.Target, ct);
@@ -293,7 +341,7 @@ namespace LightTranslate
                     ShowText("…", point, 8);
                 translated = await request;
                 if (!Valid(version, window)) return;
-                ShowText(translated, point, ReadingSeconds(translated));
+                ShowText(translated, point, ReadingSeconds(translated), true);
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)
@@ -312,11 +360,9 @@ namespace LightTranslate
             return !disposed && version == generation && settings.Enabled && Native.GetForegroundWindow() == window;
         }
         private static int ReadingSeconds(string text) { return Math.Max(6, Math.Min(22, 4 + text.Length / 12)); }
-        private void ShowText(string text, Native.POINT point, int seconds)
+        private void ShowText(string text, Native.POINT point, int seconds, bool translated = false)
         {
-            displaySeconds = seconds;
-            shownAt = DateTime.UtcNow;
-            awayAt = DateTime.MinValue;
+            lifetime.Start(DateTime.UtcNow, BubbleLifetime.DisplaySeconds(settings.AutoHideSeconds, seconds, translated));
             bubble.Present(text, point);
             Trace("bubble visible=" + bubble.IsVisible + " chars=" + text.Length);
         }
@@ -354,15 +400,7 @@ namespace LightTranslate
             Native.GetCursorPos(out point);
             bool near = Math.Abs(point.x - anchor.x) < 120 && Math.Abs(point.y - anchor.y) < 90;
             bool over = bubble.Contains(point);
-            var now = DateTime.UtcNow;
-            if (over) { shownAt = now; awayAt = DateTime.MinValue; return; }
-            if (!near)
-            {
-                if (awayAt == DateTime.MinValue) awayAt = now;
-                if ((now - awayAt).TotalMilliseconds > 550 && (now - shownAt).TotalMilliseconds > 900) { Dismiss(false); return; }
-            }
-            else awayAt = DateTime.MinValue;
-            if ((now - shownAt).TotalSeconds > displaySeconds) Dismiss(false);
+            if (lifetime.ShouldDismiss(DateTime.UtcNow, near, over)) Dismiss(false);
         }
         public void Dispose()
         {
@@ -374,6 +412,7 @@ namespace LightTranslate
             tray.Visible = false;
             tray.Icon.Dispose();
             tray.Dispose();
+            if (readingSettings != null) readingSettings.Close();
             bubble.Close();
             translator.Dispose();
             lexicon.Dispose();
@@ -605,6 +644,23 @@ namespace LightTranslate
         {
             return text.Any(c => char.IsLetter(c) && !(c >= '\u3400' && c <= '\u9fff'));
         }
+        internal static bool ShouldTranslate(string text, int minimumPercent)
+        {
+            if (string.IsNullOrWhiteSpace(text) || !HasForeignText(text)) return false;
+            // Zero disables the new ratio filter, preserving the existing language guard.
+            if (minimumPercent <= 0) return true;
+            int english = 0, letters = 0;
+            for (int i = 0; i < text.Length; i++)
+            {
+                if (char.IsLetter(text, i))
+                {
+                    letters++;
+                    if ((text[i] >= 'A' && text[i] <= 'Z') || (text[i] >= 'a' && text[i] <= 'z')) english++;
+                }
+                if (char.IsHighSurrogate(text[i]) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1])) i++;
+            }
+            return english > 0 && english * 100L >= letters * (long)minimumPercent;
+        }
         public static async Task<string> CopySelection(IntPtr window, CancellationToken ct, Action<string> trace)
         {
             if (Native.GetForegroundWindow() != window || Native.ModifierDown()) { trace("copy skipped focus/modifier"); return null; }
@@ -711,19 +767,7 @@ namespace LightTranslate
                 Effect = new DropShadowEffect { Color = Colors.Black, BlurRadius = 18, Opacity = 0.15, ShadowDepth = 3 }
             };
             Content = new Border { Padding = new Thickness(12), Child = card };
-            try
-            {
-                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
-                {
-                    if (key != null && Convert.ToInt32(key.GetValue("AppsUseLightTheme", 1)) == 0)
-                    {
-                        card.Background = new SolidColorBrush(Color.FromRgb(37, 40, 47));
-                        card.BorderBrush = new SolidColorBrush(Color.FromArgb(38, 255, 255, 255));
-                        content.Foreground = new SolidColorBrush(Color.FromRgb(237, 239, 243));
-                    }
-                }
-            }
-            catch { }
+            ApplySettings(new Settings());
             SourceInitialized += delegate
             {
                 var handle = new WindowInteropHelper(this).Handle;
@@ -734,6 +778,16 @@ namespace LightTranslate
                     return IntPtr.Zero;
                 });
             };
+        }
+        internal void ApplySettings(Settings settings)
+        {
+            var background = BubbleAppearance.Background(settings.BubbleBackground);
+            content.FontFamily = BubbleAppearance.ResolveFont(settings.BubbleFontFamily);
+            content.FontSize = settings.BubbleFontSize;
+            content.LineHeight = settings.BubbleFontSize * 23 / 14;
+            content.Foreground = new SolidColorBrush(BubbleAppearance.Foreground(background));
+            card.Background = new SolidColorBrush(background);
+            card.BorderBrush = new SolidColorBrush(BubbleAppearance.Border(background));
         }
         public bool Contains(Native.POINT p)
         {
@@ -1115,6 +1169,7 @@ namespace LightTranslate
             if (SelectionReader.HasForeignText("这是中文") || !SelectionReader.HasForeignText("Read this text")) throw new Exception("Language guard failed");
             results["clipboardSnapshot"] = "text + HTML preserved";
             results["guards"] = "terminal + language passed";
+            ReadingSettingsTests.Run(results);
             Program.Log("self-test", "dictionary and clipboard snapshot passed");
             if (System.Reflection.Assembly.GetExecutingAssembly().GetReferencedAssemblies().Any(a => a.Name == "UIAutomationClient"))
                 throw new Exception("Unsafe UIA client dependency remains");
