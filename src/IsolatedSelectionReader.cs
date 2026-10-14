@@ -39,7 +39,7 @@ namespace LightTranslate
                     var output = process.StandardOutput.ReadToEndAsync();
                     var diagnostic = process.StandardError.ReadToEndAsync();
                     // The helper self-exits on timeout; never terminate the user's application.
-                    bool exited = await Task.Run(delegate { return process.WaitForExit(2200); });
+                    bool exited = await Task.Run(delegate { return process.WaitForExit(3800); });
                     ct.ThrowIfCancellationRequested();
                     if (!exited) { Program.Log("selection-helper", "wait-timeout"); return null; }
                     string status = (await diagnostic).Trim();

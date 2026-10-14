@@ -13,7 +13,7 @@ internal static class SelectionHost
     private static int Main(string[] args)
     {
         // Keep the deadline alive through COM finalization; it may only end this helper.
-        deadline = new Timer(delegate { try { Console.Error.WriteLine("deadline"); } catch { } TerminateProcess(new IntPtr(-1), 3); }, null, 1500, Timeout.Infinite);
+        deadline = new Timer(delegate { try { Console.Error.WriteLine("deadline"); } catch { } TerminateProcess(new IntPtr(-1), 3); }, null, 3000, Timeout.Infinite);
         try
         {
             long rootValue, focusValue; int maximum;
