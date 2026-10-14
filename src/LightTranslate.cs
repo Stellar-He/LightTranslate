@@ -45,6 +45,7 @@ namespace LightTranslate
                 if (args.Length > 0 && args[0] == "--self-test-clipboard-native") return ClipboardNativeTests.Run();
                 if (args.Length > 0 && args[0] == "--self-test-providers") return TranslationProviderTests.RunStandalone();
                 if (args.Length > 0 && args[0] == "--self-test-tray") return TrayIconRenderer.RunStandalone();
+                if (args.Length > 0 && args[0] == "--self-test-gestures") return SelectionGestureTests.Run();
                 if (args.Length > 0 && args[0] == "--self-test-selection") return SelectionIntegrationTests.Run();
                 if (args.Length > 0 && args[0] == "--self-test") return SelfTest.Run(false);
                 if (args.Length > 0 && args[0] == "--self-test-offline") return SelfTest.Run(true);
@@ -236,7 +237,9 @@ namespace LightTranslate
         internal static System.Drawing.Icon MakeIcon(Settings value = null)
         { return TrayIconRenderer.Create(value ?? new Settings()); }
 
-        private void HandleMouse(int message, Native.MOUSE data, IntPtr capturedWindow)
+        private SelectionSurface downSurface;
+
+        private void HandleMouse(int message, Native.MOUSE data, IntPtr capturedWindow, SelectionSurface surface)
         {
             if (!disposed)
             {
@@ -255,7 +258,8 @@ namespace LightTranslate
                             down = settings.Enabled;
                             dragged = false;
                             downPoint = data.pt;
-                            downWindow = Native.GetAncestor(Native.WindowFromPoint(data.pt), 2);
+                            downSurface = surface;
+                            downWindow = surface == null ? IntPtr.Zero : surface.Root;
                         }
                     }
                     else if (message == 0x200 && down)
@@ -266,14 +270,15 @@ namespace LightTranslate
                     {
                         mouseUps++;
                         down = false;
-                        bool twice = unchecked(data.time - lastUpTime) <= Native.GetDoubleClickTime()
+                        bool eligible = SelectionSurface.AllowsSelection(downSurface, surface);
+                        bool twice = eligible && lastUpTime != 0 && unchecked(data.time - lastUpTime) <= Native.GetDoubleClickTime()
                             && Math.Abs(data.pt.x - previousUp.x) <= Native.GetSystemMetrics(36)
                             && Math.Abs(data.pt.y - previousUp.y) <= Native.GetSystemMetrics(37);
                         previousUp = data.pt;
-                        lastUpTime = data.time;
+                        lastUpTime = eligible ? data.time : 0;
                         IntPtr window = capturedWindow;
-                        Trace("mouse-up drag=" + dragged + " double=" + twice + " same-window=" + (window == downWindow) + " same-app=" + Native.SameApp(window, downWindow) + " injected=" + ((data.flags & 1) != 0));
-                        if (settings.Enabled && (dragged || twice) && (window == downWindow || Native.SameApp(window, downWindow)) && !bubble.Contains(data.pt))
+                        Trace("mouse-up eligible=" + eligible + " drag=" + dragged + " double=" + twice + " same-window=" + (window == downWindow) + " same-app=" + Native.SameApp(window, downWindow) + " injected=" + ((data.flags & 1) != 0));
+                        if (settings.Enabled && eligible && (dragged || twice) && (window == downWindow || Native.SameApp(window, downWindow)) && !bubble.Contains(data.pt))
                         {
                             var point = data.pt;
                             int queuedVersion = generation;
@@ -453,7 +458,7 @@ namespace LightTranslate
     {
         private const uint ProbeMessage = 0x84c0, DropTestMessage = 0x84c1;
         private readonly Dispatcher dispatcher;
-        private readonly Action<int, Native.MOUSE, IntPtr> onMouse;
+        private readonly Action<int, Native.MOUSE, IntPtr, SelectionSurface> onMouse;
         private readonly Action<int, Native.KEYBOARD, IntPtr> onKeyboard;
         private readonly Native.Hook mouseCallback, keyboardCallback;
         private readonly Thread thread;
@@ -476,7 +481,7 @@ namespace LightTranslate
         public int InstallationVersion { get { return Interlocked.CompareExchange(ref installationVersion, 0, 0); } }
         internal int Probes { get { return Interlocked.CompareExchange(ref probes, 0, 0); } }
 
-        public InputHooks(Dispatcher dispatcher, Action<int, Native.MOUSE, IntPtr> onMouse,
+        public InputHooks(Dispatcher dispatcher, Action<int, Native.MOUSE, IntPtr, SelectionSurface> onMouse,
             Action<int, Native.KEYBOARD, IntPtr> onKeyboard, bool testMode = false)
         {
             this.dispatcher = dispatcher;
@@ -518,7 +523,7 @@ namespace LightTranslate
                     else if (message.message == ProbeMessage && testMode)
                     {
                         Interlocked.Increment(ref probes);
-                        Queue(delegate { onMouse(0, new Native.MOUSE(), IntPtr.Zero); });
+                        Queue(delegate { onMouse(0, new Native.MOUSE(), IntPtr.Zero, null); });
                     }
                     else if (message.message == DropTestMessage && testMode) RemoveHooks();
                 }
@@ -556,7 +561,8 @@ namespace LightTranslate
                         if (forward)
                         {
                             IntPtr window = Native.GetForegroundWindow();
-                            Queue(delegate { onMouse(message, data, window); });
+                            SelectionSurface surface = (message == 0x201 || message == 0x202) ? SelectionSurface.Capture(data.pt) : null;
+                            Queue(delegate { onMouse(message, data, window, surface); });
                         }
                     }
                 }
@@ -1195,7 +1201,7 @@ namespace LightTranslate
             int forwarded = 0;
             var dispatcher = Dispatcher.CurrentDispatcher;
             using (var hooks = new InputHooks(dispatcher,
-                delegate(int message, Native.MOUSE data, IntPtr window) { if (message == 0) forwarded++; },
+                delegate(int message, Native.MOUSE data, IntPtr window, SelectionSurface surface) { if (message == 0) forwarded++; },
                 delegate(int message, Native.KEYBOARD data, IntPtr window) { }, true))
             {
                 // Keep the WPF/clipboard STA blocked while probing the real input thread.
