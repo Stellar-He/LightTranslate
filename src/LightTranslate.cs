@@ -187,7 +187,7 @@ namespace LightTranslate
             var warming = translator.WarmConnection();
             bubble = new Bubble();
             bubble.ApplySettings(settings);
-            tray = new Forms.NotifyIcon { Text = "轻译 · 选中即译", Icon = MakeIcon(), Visible = true };
+            tray = new Forms.NotifyIcon { Text = "轻译 · 选中即译", Icon = MakeIcon(settings), Visible = true };
             var menu = new Forms.ContextMenuStrip();
             enabledItem = new Forms.ToolStripMenuItem("自动划词翻译") { Checked = settings.Enabled, CheckOnClick = true };
             enabledItem.Click += delegate
@@ -223,27 +223,13 @@ namespace LightTranslate
                 if (settingsWindow.WindowState == WindowState.Minimized) settingsWindow.WindowState = WindowState.Normal;
                 settingsWindow.Activate(); return;
             }
-            settingsWindow = new SettingsWindow(settings, delegate { enabledItem.Checked = settings.Enabled; Dismiss(true); bubble.ApplySettings(settings); });
+            settingsWindow = new SettingsWindow(settings, delegate { enabledItem.Checked = settings.Enabled; Dismiss(true); bubble.ApplySettings(settings); TrayIconRenderer.Update(tray, settings); });
             settingsWindow.Closed += delegate { settingsWindow = null; };
             settingsWindow.Show();
         }
 
-        internal static System.Drawing.Icon MakeIcon()
-        {
-            using (var bmp = new System.Drawing.Bitmap(32, 32))
-            using (var g = System.Drawing.Graphics.FromImage(bmp))
-            using (var brush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(56, 112, 210)))
-            using (var font = new System.Drawing.Font("Microsoft YaHei UI", 16, System.Drawing.FontStyle.Bold))
-            {
-                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                g.Clear(System.Drawing.Color.Transparent);
-                g.FillEllipse(brush, 1, 1, 30, 30);
-                g.DrawString("译", font, System.Drawing.Brushes.White, 1, 1);
-                IntPtr h = bmp.GetHicon();
-                try { return (System.Drawing.Icon)System.Drawing.Icon.FromHandle(h).Clone(); }
-                finally { Native.DestroyIcon(h); }
-            }
-        }
+        internal static System.Drawing.Icon MakeIcon(Settings value = null)
+        { return TrayIconRenderer.Create(value ?? new Settings()); }
 
         private void HandleMouse(int message, Native.MOUSE data, IntPtr capturedWindow)
         {
@@ -1139,6 +1125,7 @@ namespace LightTranslate
             if (!SelectionReader.IsTerminal("pwsh") || SelectionReader.IsTerminal("Codex")) throw new Exception("Terminal guard failed");
             if (SelectionReader.HasForeignText("这是中文") || !SelectionReader.HasForeignText("Read this text")) throw new Exception("Language guard failed");
             results["guards"] = "terminal + language passed";
+            TrayIconRenderer.Test(results);
             ReadingSettingsTests.Run(results);
             UnifiedSettingsTests.Run(results);
             Program.Log("self-test", "dictionary and clipboard snapshot passed");
@@ -1228,8 +1215,7 @@ namespace LightTranslate
             if ((Native.GetWindowLong(handle, -20) & 0x08000000) == 0) throw new Exception("No-activation style missing");
             results["noActivation"] = "window style verified";
             bubble.RenderPreview(Path.Combine(Program.Folder, "preview.png"));
-            using (var icon = Controller.MakeIcon())
-            using (var file = File.Create(Path.Combine(Program.Folder, "LightTranslate.ico"))) icon.Save(file);
+            File.WriteAllBytes(Path.Combine(Program.Folder, "LightTranslate.ico"), TrayIconRenderer.Encode(new Settings()));
             results["bubblePreview"] = "rendered";
             File.WriteAllText(Path.Combine(Program.Folder, "self-test.json"), new JavaScriptSerializer().Serialize(results), Encoding.UTF8);
             Program.Log("self-test", "passed");

@@ -175,3 +175,13 @@ The change bypasses the observed IDataObject/OLE IStream conversion crash path.
 The original native crash has not been reproduced, and the faulty format or
 provider has not been identified. These tests exercise the replacement behavior,
 not the original corrupt COM pointer.
+
+## Tray icon rendering
+
+The offline self-test renders `tray-icon-preview.png` at 16/20/24/32/48/64 px
+with three font/background combinations. Glyph ink bounds are centered inside
+the solid circle. The selected reading font and automatic contrast foreground
+are reused; font size is fitted to the icon, independently of bubble text size.
+The test replaces an invisible NotifyIcon 100 times and checks USER handle growth.
+This does not replace a live Explorer tray/DPI test. Saved appearance settings
+update the running tray icon and dispose its previous Icon; canceled edits do not.
