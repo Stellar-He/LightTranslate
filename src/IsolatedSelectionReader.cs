@@ -68,7 +68,7 @@ namespace LightTranslate
             return new SelectionReadResult(SelectionReadState.ProbeFailed);
         }
 
-        internal static async Task<SelectionReadResult> ReadResult(IntPtr window, CancellationToken ct, int maximum = 65537, IntPtr focus = default(IntPtr), Native.POINT? point = null)
+        internal static async Task<SelectionReadResult> ReadResult(IntPtr window, CancellationToken ct, int maximum = 65537, IntPtr focus = default(IntPtr), Native.POINT? point = null, SelectionSurface origin = null)
         {
             ct.ThrowIfCancellationRequested();
             if (focus == IntPtr.Zero)
@@ -83,6 +83,8 @@ namespace LightTranslate
             if (focus == IntPtr.Zero || !File.Exists(path)) { Program.Log("selection-helper", "missing-helper-or-window"); return new SelectionReadResult(SelectionReadState.Failed); }
             string arguments = window.ToInt64().ToString(CultureInfo.InvariantCulture) + " " + focus.ToInt64().ToString(CultureInfo.InvariantCulture) + " " + maximum.ToString(CultureInfo.InvariantCulture);
             if (point.HasValue) arguments += " " + point.Value.x.ToString(CultureInfo.InvariantCulture) + " " + point.Value.y.ToString(CultureInfo.InvariantCulture);
+            if (point.HasValue && origin != null) arguments += " " + origin.Window.ToInt64().ToString(CultureInfo.InvariantCulture)
+                + " " + origin.Point.x.ToString(CultureInfo.InvariantCulture) + " " + origin.Point.y.ToString(CultureInfo.InvariantCulture);
             var start = new ProcessStartInfo(path, arguments)
             { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true, StandardOutputEncoding = Encoding.UTF8 };
             try

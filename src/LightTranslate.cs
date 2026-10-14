@@ -282,8 +282,9 @@ namespace LightTranslate
                         if (settings.Enabled && eligible && (dragged || twice) && (window == downWindow || Native.SameApp(window, downWindow)) && !bubble.Contains(data.pt))
                         {
                             var point = data.pt;
+                            var origin = downSurface;
                             int queuedVersion = generation;
-                            app.Dispatcher.BeginInvoke(new Action(delegate { if (queuedVersion == generation) BeginSelection(window, point); }));
+                            app.Dispatcher.BeginInvoke(new Action(delegate { if (queuedVersion == generation) BeginSelection(window, point, origin); }));
                         }
                     }
                     else if (message == 0x20A || message == 0x20E || message == 0x204 || message == 0x207)
@@ -301,6 +302,8 @@ namespace LightTranslate
                 if (data.extra != Native.OwnInputMarker)
                 {
                     if (message == 0x100 || message == 0x104) Dismiss(false);
+                    if ((message == 0x100 || message == 0x104) && data.vkCode == 0x1B)
+                    { down = false; lastUpTime = 0; } // Escape cancels an in-progress drag.
                     if ((message == 0x101 || message == 0x105) && (data.vkCode == 0xA0 || data.vkCode == 0xA1) && settings.Enabled)
                     {
                         Native.POINT point;
@@ -321,7 +324,7 @@ namespace LightTranslate
             lifetime.Reset();
         }
 
-        private async void BeginSelection(IntPtr window, Native.POINT point)
+        private async void BeginSelection(IntPtr window, Native.POINT point, SelectionSurface origin = null)
         {
             selections++;
             Dismiss(true);
@@ -345,7 +348,7 @@ namespace LightTranslate
                 // Inspect text context in the isolated helper before any clipboard access.
                 // The main process never owns UIAutomationClient objects.
                 if (!settings.ClipboardFallback || SelectionReader.IsTerminal(processName)) return;
-                string text = await SelectionReader.CopySelection(window, ct, Trace, point);
+                string text = await SelectionReader.CopySelection(window, ct, Trace, point, origin);
                 Trace("selection chars=" + (text == null ? 0 : text.Length));
                 if (!Valid(version, window) || string.IsNullOrWhiteSpace(text)) { Trace("selection discarded valid=" + Valid(version, window)); return; }
                 text = text.Trim();
@@ -696,13 +699,13 @@ namespace LightTranslate
             }
             return english > 0 && english * 100L >= letters * (long)minimumPercent;
         }
-        public static async Task<string> CopySelection(IntPtr window, CancellationToken ct, Action<string> trace, Native.POINT? point = null)
+        public static async Task<string> CopySelection(IntPtr window, CancellationToken ct, Action<string> trace, Native.POINT? point = null, SelectionSurface origin = null)
         {
             if (Native.GetForegroundWindow() != window || Native.ModifierDown()) { trace("copy skipped focus/modifier"); return null; }
             if (Native.IsPasswordFocus(window)) { trace("password field skipped"); return null; }
             Func<bool> valid = delegate { return !ct.IsCancellationRequested && Native.GetForegroundWindow() == window && !Native.ModifierDown(); };
             return await SelectionAcquisition.Read(
-                delegate { return IsolatedSelectionReader.ReadResult(window, ct, point: point); },
+                delegate { return IsolatedSelectionReader.ReadResult(window, ct, point: point, origin: origin); },
                 async delegate(SelectionReadResult result)
                 {
                     using (var clipboard = new NativeSelectionClipboard())

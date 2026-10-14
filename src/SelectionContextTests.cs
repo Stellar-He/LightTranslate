@@ -10,6 +10,21 @@ namespace LightTranslate
 {
     internal static class SelectionContextTests
     {
+        // Reproduce the metadata contract observed on real Explorer property cells:
+        // MSAA text/Edit role, no TextPattern, nested under an item-selection surface.
+        private sealed class PropertyCell : Forms.Control
+        {
+            internal bool ReadOnlyCell;
+            protected override Forms.AccessibleObject CreateAccessibilityInstance() { return new PropertyAccessibility(this); }
+            private sealed class PropertyAccessibility : Forms.Control.ControlAccessibleObject
+            {
+                private readonly PropertyCell cell;
+                internal PropertyAccessibility(PropertyCell cell) : base(cell) { this.cell = cell; }
+                public override Forms.AccessibleRole Role { get { return Forms.AccessibleRole.Text; } }
+                public override Forms.AccessibleStates State { get { return cell.ReadOnlyCell ? Forms.AccessibleStates.ReadOnly | Forms.AccessibleStates.Focusable : Forms.AccessibleStates.None; } }
+                public override string Value { get { return "synthetic property"; } set { } }
+            }
+        }
         private sealed class Clipboard : ISelectionClipboard
         {
             internal int Snapshots, Copies, Reads, Restores;
@@ -64,6 +79,20 @@ namespace LightTranslate
                 nonText("selected icon drag context", list);
                 list.View = Forms.View.Details; list.Columns.Add("synthetic column", 120);
                 nonText("explorer-style item list", list);
+                list.Items.Add("second synthetic item").Selected = true;
+                nonText("multiple selected items", list);
+                using (var property = new PropertyCell())
+                {
+                    list.Controls.Add(property); IntPtr propertyHandle = property.Handle;
+                    nonText("inactive editable property inside item list", property);
+                    property.ReadOnlyCell = true;
+                    nonText("read-only property inside item list", property);
+                }
+                using (var unsupportedEdit = new PropertyCell())
+                {
+                    form.Controls.Add(unsupportedEdit); IntPtr unsupportedHandle = unsupportedEdit.Handle;
+                    check("unsupported Edit outside item surface is not globally suppressed", probe(unsupportedEdit).State == SelectionReadState.TextUnsupported);
+                }
                 tree.Nodes.Add("synthetic tree item"); tree.SelectedNode = tree.Nodes[0];
                 nonText("tree selection context", tree);
                 using (var rename = new Forms.TextBox { Text = "reversible.txt" })
@@ -72,6 +101,8 @@ namespace LightTranslate
                     var clipboard = new Clipboard();
                     check("inline edit inside item list remains selectable text", Acquire(probe(rename), clipboard) == "reversible");
                     check("inline edit selection avoids clipboard", clipboard.Snapshots == 0 && clipboard.Copies == 0);
+                    rename.ReadOnly = true;
+                    check("read-only text with TextPattern remains selectable inside list", Acquire(probe(rename), clipboard) == "reversible");
                 }
                 foreach (Forms.Control surface in new Forms.Control[] {
                     new Forms.Panel(), new Forms.GroupBox(), new Forms.Button { Text = "synthetic action" },
