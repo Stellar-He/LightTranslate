@@ -20,6 +20,9 @@ jobs:
       - name: Clipboard workflow regression
         shell: pwsh
         run: ./scripts/test-clipboard.ps1
+      - name: Translation providers and DeepL offline regression
+        shell: pwsh
+        run: ./scripts/test-providers.ps1
       - name: Isolated native clipboard regression
         shell: pwsh
         run: ./scripts/test-clipboard.ps1 -Native

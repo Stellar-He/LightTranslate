@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -100,6 +100,10 @@ namespace LightTranslate
         private readonly Settings settings;
         private readonly Action saved;
         private readonly IStartupRegistration startup;
+        private readonly IDeepLCredentials credentials;
+        private readonly PasswordBox deepLKey;
+        private readonly TextBlock deepLStatus;
+        private bool clearDeepLKey;
         private readonly CheckBox enabled, clipboard, autoStart;
         private readonly ComboBox language, provider, fontFamily, fontSize, autoHide;
         private readonly TextBox maxSelection, excludedApps, background, englishPercent;
@@ -110,10 +114,11 @@ namespace LightTranslate
         private bool refreshingStartup, startupDirty;
         private bool? observedStartup;
 
-        internal SettingsWindow(Settings settings, Action saved, IStartupRegistration startup = null)
+        internal SettingsWindow(Settings settings, Action saved, IStartupRegistration startup = null, IDeepLCredentials credentials = null)
         {
             this.settings = settings; this.saved = saved;
             this.startup = startup ?? StartupRegistration.CurrentUser();
+            this.credentials = credentials ?? DeepLCredentials.Current();
             Title = "轻译 · 设置";
             Width = 620; Height = 790; MinWidth = 480; MinHeight = 450;
             MaxHeight = Math.Max(450, SystemParameters.WorkArea.Height - 40);
@@ -137,12 +142,12 @@ namespace LightTranslate
             clipboard = Toggle("通过剪贴板获取选中文字");
             translation.Children.Add(enabled); translation.Children.Add(clipboard);
             translation.Children.Add(Help("托盘开关立即生效并同步到这里；面板修改在保存后生效。当前仅支持剪贴板取词；关闭后停止划词翻译。取词会临时复制选区；剪贴板含不支持的格式时跳过，不覆盖原内容。"));
-            provider = new ComboBox { ItemsSource = new[] { "自动（微软失败后腾讯）", "仅微软", "仅腾讯（中文）" }, MinHeight = 32 };
+            provider = new ComboBox { ItemsSource = new[] { "自动（微软失败后腾讯）", "仅微软", "仅腾讯（中文）", "仅 DeepL（自备 API 密钥）" }, MinHeight = 32 };
             AddField(translation, "在线翻译服务", provider);
-            translation.Children.Add(Help("自动模式先查本地英汉词库，再请求在线服务；仅微软或仅腾讯会跳过本地词库，不切换服务。现有内置服务无需填写密钥。"));
+            translation.Children.Add(Help("自动模式先查本地英汉词库，再尝试微软、腾讯；指定服务会跳过词库且不自动切换。DeepL 须在 DeepL 页保存密钥；自动模式不会调用 DeepL。"));
             language = new ComboBox { IsEditable = true, ItemsSource = Languages, MinHeight = 32 };
-            AddField(translation, "目标语言（微软）", language);
-            translation.Children.Add(Help("可直接输入语言代码，如 en、ja。目标语言只对微软有效；自动模式下的本地词库和腾讯回退仍输出中文。仅腾讯固定输出中文。"));
+            AddField(translation, "目标语言", language);
+            translation.Children.Add(Help("可直接输入服务支持的语言代码，如 en、ja。DeepL 简繁中文分别使用 ZH-HANS、ZH-HANT。词库和腾讯固定输出中文。"));
             maxSelection = Input();
             AddField(translation, "选区字符数上限", maxSelection);
             translation.Children.Add(Help("正整数，默认 2,000。超过上限只提示分段选择，不发送该选区。"));
@@ -195,6 +200,20 @@ namespace LightTranslate
             AutomationProperties.SetHelpText(autoHide, "自动，或 1 到 120 秒；鼠标悬停保留浮层");
             AutomationProperties.SetHelpText(englishPercent, "范围 0 到 100，分母为全部 Unicode 字母，不含空白、数字和标点");
 
+            var deepL = NewTab("DeepL");
+            deepL.Children.Add(Heading("DeepL 官方 API（可选）"));
+            deepL.Children.Add(Help("选择“仅 DeepL”并保存密钥后，选中文字将发送给 DeepL，可能按账户套餐计费。不会自动回退到其他服务，也不会在自动模式中调用 DeepL。"));
+            deepLStatus = Help(""); deepL.Children.Add(deepLStatus);
+            deepLKey = new PasswordBox { MinHeight = 32, MaxLength = 1024, VerticalContentAlignment = VerticalAlignment.Center };
+            AddField(deepL, "API 密钥", deepLKey);
+            deepL.Children.Add(Help("留空保留已保存密钥；密钥不会回填。保存时使用 Windows 当前用户加密，单独存放，不写入普通配置。其他用户或电脑需重新输入。"));
+            var clearKey = Button("清除已保存密钥"); clearKey.HorizontalAlignment = HorizontalAlignment.Left;
+            clearKey.Click += delegate { StageDeepLClear(); }; deepL.Children.Add(clearKey);
+            deepL.Children.Add(Help("新增、替换和清除都在点击“保存”后生效；取消不改变密钥。保存不会发起联网验证。"));
+            deepL.Children.Add(Help("按官方密钥标记选择 api.deepl.com 或 api-free.deepl.com，不支持自定义地址。可用额度和费用请以 DeepL 账户为准。"));
+            deepLKey.PasswordChanged += delegate { if (deepLKey.Password.Length != 0) clearDeepLKey = false; RefreshDeepLStatus(); };
+            RefreshDeepLStatus();
+
             var footer = new StackPanel { Margin = new Thickness(24, 12, 24, 18) };
             error = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(180, 35, 24)), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10), Visibility = Visibility.Collapsed };
             AutomationProperties.SetName(error, "设置错误"); footer.Children.Add(error);
@@ -216,7 +235,7 @@ namespace LightTranslate
             autoStart.Checked += delegate { StartupChoiceChanged(); }; autoStart.Unchecked += delegate { StartupChoiceChanged(); };
             PreviewKeyDown += delegate(object sender, KeyEventArgs e) { if (e.Key == Key.Escape) { e.Handled = true; Close(); } };
             settings.Changed += SyncEnabled;
-            Closed += delegate { settings.Changed -= SyncEnabled; };
+            Closed += delegate { settings.Changed -= SyncEnabled; deepLKey.Clear(); };
             Activated += delegate { RefreshStartup(); };
             Fill(settings); RefreshStartup();
         }
@@ -250,7 +269,8 @@ namespace LightTranslate
         {
             if (error != null) error.Visibility = Visibility.Collapsed;
             enabled.IsChecked = value.Enabled; clipboard.IsChecked = value.ClipboardFallback;
-            provider.SelectedIndex = value.TranslationProvider == "microsoft" ? 1 : value.TranslationProvider == "tencent" ? 2 : 0;
+            provider.SelectedIndex = value.TranslationProvider == "microsoft" ? 1 : value.TranslationProvider == "tencent" ? 2 : value.TranslationProvider == "deepl" ? 3 : 0;
+            deepLKey.Clear(); clearDeepLKey = false; RefreshDeepLStatus();
             language.Text = LanguageLabel(value.Target);
             maxSelection.Text = value.MaxSelectionLength.ToString(CultureInfo.CurrentCulture);
             excludedApps.Text = AppsText(value.ExcludedApps);
@@ -320,7 +340,7 @@ namespace LightTranslate
                 return Invalid("最低英文占比请输入 0–100 的整数百分比。", englishPercent, 0);
             var next = settings.Clone();
             next.Enabled = enabled.IsChecked == true; next.ClipboardFallback = clipboard.IsChecked == true;
-            next.TranslationProvider = provider.SelectedIndex == 1 ? "microsoft" : provider.SelectedIndex == 2 ? "tencent" : "auto";
+            next.TranslationProvider = provider.SelectedIndex == 1 ? "microsoft" : provider.SelectedIndex == 2 ? "tencent" : provider.SelectedIndex == 3 ? "deepl" : "auto";
             if (provider.SelectedIndex != 2 && language.Text != LanguageLabel(settings.Target))
             {
                 string choice = Languages.FirstOrDefault(x => x == language.Text);
@@ -345,14 +365,33 @@ namespace LightTranslate
             next.BubbleFontFamily = BubbleAppearance.ResolveFont(fontFamily.SelectedItem as string).Source;
             next.BubbleFontSize = size; next.BubbleBackground = background.Text.Trim().ToUpperInvariant();
             next.AutoHideSeconds = seconds; next.MinEnglishPercent = percent;
+            string newKey = deepLKey.Password.Trim();
+            if (newKey.Length != 0 && !DeepLCredentials.ValidKey(newKey))
+                return Invalid("API 密钥不能包含空白、换行或非 ASCII 字符。", deepLKey, 3);
+            Action credentialRollback = null;
             Action rollback = null; string startupError;
             if (startupDirty && !startup.TrySet(autoStart.IsChecked == true, out rollback, out startupError))
             {
                 RefreshAfterFailure(); return Invalid(startupError, autoStart, 2);
             }
+            try
+            {
+                if (clearDeepLKey || newKey.Length != 0) credentialRollback = credentials.Replace(clearDeepLKey ? null : newKey);
+            }
+            catch
+            {
+                string message = "无法保存 DeepL 密钥，请检查应用目录权限；设置未保存。";
+                if (rollback != null) { try { rollback(); } catch { message += " 启动项恢复失败，请检查启动页。"; } }
+                RefreshAfterFailure(); return Invalid(message, deepLKey, 3);
+            }
             if (!next.TrySave(path))
             {
                 string message = "无法保存设置。请检查应用目录是否可写；当前配置未改变。";
+                if (credentialRollback != null)
+                {
+                    try { credentialRollback(); }
+                    catch { message += " DeepL 密钥恢复失败，请检查 DeepL 页并重新保存或清除。"; }
+                }
                 if (rollback != null)
                 {
                     try { rollback(); }
@@ -383,6 +422,14 @@ namespace LightTranslate
         { fontSize.Text = size; background.Text = color; autoHide.Text = seconds; englishPercent.Text = percent; }
         internal void SetBehaviorForTest(bool on, bool capture, string target, string maximum, string apps)
         { enabled.IsChecked = on; clipboard.IsChecked = capture; language.Text = target; maxSelection.Text = maximum; excludedApps.Text = apps; }
+        private void RefreshDeepLStatus()
+        {
+            deepLStatus.Text = clearDeepLKey ? "待保存：清除密钥。" : deepLKey.Password.Length != 0 ? "待保存：替换密钥。" : credentials.Exists ? "已保存加密密钥（未验证）。" : "尚未配置密钥；DeepL 不会发起请求。";
+        }
+        private void StageDeepLClear() { deepLKey.Clear(); clearDeepLKey = true; RefreshDeepLStatus(); }
+        internal void SetDeepLKeyForTest(string key) { deepLKey.Password = key; }
+        internal void ClearDeepLKeyForTest() { StageDeepLClear(); }
+        internal bool DeepLInputEmptyForTest { get { return deepLKey.Password.Length == 0; } }
         internal void SetProviderForTest(int value) { provider.SelectedIndex = value; }
         internal int ProviderForTest { get { return provider.SelectedIndex; } }
         internal bool TargetEnabledForTest { get { return language.IsEnabled; } }

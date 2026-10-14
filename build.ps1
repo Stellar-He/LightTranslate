@@ -10,7 +10,7 @@ $compiler = Join-Path $framework 'csc.exe'
 if (-not (Test-Path -LiteralPath $compiler)) { throw '.NET Framework 4.8 and its 64-bit compiler are required.' }
 $outputPath = [System.IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
-$references = @('System.dll','System.Core.dll','System.Net.Http.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Web.Extensions.dll','System.Xaml.dll','Microsoft.VisualBasic.dll') |
+$references = @('System.dll','System.Core.dll','System.Security.dll','System.Net.Http.dll','System.Drawing.dll','System.Windows.Forms.dll','System.Web.Extensions.dll','System.Xaml.dll','Microsoft.VisualBasic.dll') |
     ForEach-Object { '/r:' + (Join-Path $framework $_) }
 $references += @('WindowsBase.dll','PresentationCore.dll','PresentationFramework.dll') |
     ForEach-Object { '/r:' + (Join-Path $framework ('WPF\' + $_)) }

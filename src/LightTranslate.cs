@@ -188,7 +188,7 @@ namespace LightTranslate
             settings = Settings.Load();
             lexicon = new Lexicon(Program.Folder);
             translator = new Translator();
-            if (settings.TranslationProvider != "tencent") { var warming = translator.WarmConnection(); }
+            if (settings.TranslationProvider == "auto" || settings.TranslationProvider == "microsoft") { var warming = translator.WarmConnection(); }
             bubble = new Bubble();
             bubble.ApplySettings(settings);
             tray = new Forms.NotifyIcon { Text = "轻译 · 选中即译", Icon = MakeIcon(settings), Visible = true };
@@ -369,7 +369,7 @@ namespace LightTranslate
             catch (Exception ex)
             {
                 Program.Log("translate", ex.GetType().Name);
-                if (Valid(version, window)) ShowText("暂时无法连接翻译服务", point, 3);
+                if (Valid(version, window)) ShowText(ex is DeepLException ? ex.Message : "暂时无法连接翻译服务", point, ex is DeepLException ? 6 : 3);
             }
             finally
             {
@@ -909,12 +909,14 @@ namespace LightTranslate
     internal sealed class Translator : IDisposable
     {
         private readonly HttpClient http;
+        private readonly DeepLTranslator deepl;
         private readonly JavaScriptSerializer json = new JavaScriptSerializer();
         private readonly Dictionary<string, string> cache = new Dictionary<string, string>();
         private readonly Queue<string> eviction = new Queue<string>();
         public Translator() : this(null) { }
-        internal Translator(HttpMessageHandler handler)
+        internal Translator(HttpMessageHandler handler, IDeepLCredentials credentials = null, HttpMessageHandler deepLHandler = null)
         {
+            deepl = new DeepLTranslator(credentials ?? DeepLCredentials.Current(), deepLHandler);
             http = handler == null ? new HttpClient() : new HttpClient(handler);
             http.Timeout = TimeSpan.FromSeconds(7);
             http.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
@@ -930,15 +932,20 @@ namespace LightTranslate
             catch { }
         }
         internal static string NormalizeProvider(string provider)
-        { return provider == "microsoft" || provider == "tencent" ? provider : "auto"; }
+        { return provider == "microsoft" || provider == "tencent" || provider == "deepl" ? provider : "auto"; }
         private static string CacheKey(string text, string target, string provider)
         { return NormalizeProvider(provider) + "\n" + (provider == "tencent" ? "zh" : target) + "\n" + text; }
         public bool TryCached(string text, string target, out string result, string provider = "auto")
-        { return cache.TryGetValue(CacheKey(text, target, provider), out result); }
+        {
+            // DeepL validates the current credential before consulting its separate cache.
+            if (provider == "deepl") { result = null; return false; }
+            return cache.TryGetValue(CacheKey(text, target, provider), out result);
+        }
         public async Task<string> Translate(string text, string target, CancellationToken ct, string provider = "auto")
         {
             ct.ThrowIfCancellationRequested();
             provider = NormalizeProvider(provider);
+            if (provider == "deepl") return await deepl.Translate(text, target, ct);
             string result;
             if (TryCached(text, target, out result, provider)) return result;
             if (provider == "tencent") result = await Tencent(text, ct);
@@ -1010,7 +1017,7 @@ namespace LightTranslate
             using (var hmac = new HMACSHA256(key))
                 return "MSTranslatorAndroidApp::" + Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(value))) + "::" + date + "::" + guid;
         }
-        public void Dispose() { http.Dispose(); }
+        public void Dispose() { http.Dispose(); deepl.Dispose(); }
     }
 
     internal static class Native

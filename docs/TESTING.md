@@ -1,4 +1,4 @@
-# 开发与测试
+﻿# 开发与测试
 
 ## 构建、自检与打包
 
@@ -57,8 +57,8 @@ GitHub Actions 会执行编译、词库构建和离线自检，并上传构建�
 |---|---|---|
 | `Enabled` | `true` | 自动划词翻译开关，也可通过托盘修改 |
 | `ClipboardFallback` | `true` | 剪贴板取词开关，关闭后停止取词 |
-| `TranslationProvider` | `auto` | `auto` 保留本地词库优先、微软失败后腾讯；`microsoft` / `tencent` 仅调用选定服务并跳过词库 |
-| `Target` | `zh-Hans` | 微软接口的目标语言；本地词库和腾讯备用接口输出中文 |
+| `TranslationProvider` | `auto` | `auto` 保留本地词库优先、微软失败后腾讯；`microsoft` / `tencent` / `deepl` 仅调用选定服务并跳过词库 |
+| `Target` | `zh-Hans` | 微软 / DeepL 的目标语言；本地词库和腾讯输出中文 |
 | `MaxSelectionLength` | `2000` | 单次选区字符数上限 |
 | `ExcludedApps` | `[]` | 排除的进程名称，可带或不带 `.exe` |
 | `Diagnostics` | `false` | 触发诊断日志开关 |
@@ -76,7 +76,7 @@ GitHub Actions 会执行编译、词库构建和离线自检，并上传构建�
 `ClipboardFallback` 沿用早期字段名，当前取词路径统一使用剪贴板。
 
 面板纳入 `Enabled`、`ClipboardFallback`、`Target`、`MaxSelectionLength`、`ExcludedApps`
-和五项阅读选项。目标语言只校验修改后输入的语言标签语法，不联网获取语言列表；服务是否支持自定义标签由微软决定。
+和五项阅读选项。目标语言只校验修改后输入的语言标签语法，不联网获取语言列表；服务是否支持自定义标签由所选服务决定。
 修改后的选区上限要求正整数，排除应用支持换行及中英文逗号/分号，按进程名校验、去重。
 未改动的原有自定义目标、长度和排除数组逐值保留；隐藏的 `Diagnostics` 克隆保留，不因普通设置或恢复默认值而重置。
 
@@ -101,11 +101,12 @@ GitHub Actions 会执行编译、词库构建和离线自检，并上传构建�
 如果用户或其他应用在取词期间更新了剪贴板，程序会避免覆盖新的内容。
 系统剪贴板历史和第三方剪贴板管理器仍可能保留临时复制记录。
 
-命中本地词库的选区不会发送给在线服务。其他文字发送给微软，主服务失败时可能发送给腾讯。
-启动时会预热微软连接，该请求不包含选区文字。在线接口采用兼容协议，当前无需个人 API 密钥；
-接口可用性由服务端决定，可能出现限流或协议变更。
+自动模式命中本地词库时不发送选区；未命中发送给微软，失败后可能发送给腾讯。
+自动或微软模式启动时预热微软连接，不包含选区；腾讯和 DeepL 模式不预热。
+明确选择单一服务时跳过词库且不回退；DeepL 需要用户保存密钥，可能计费。
+微软和腾讯内置接口无需个人密钥；接口可用性由服务端决定，可能限流或变更。
 
-译文缓存最多 256 条，仅保存在当前进程内。程序不记录选区原文或用户译文。
+普通服务和 DeepL 各有最多 256 条译文缓存，仅保存在当前进程内。程序不记录选区原文或用户译文。
 诊断日志启用后会记录进程名、进程编号、字符数和触发状态；启动错误日志可能包含本机路径。
 
 ## 兼容性记录
@@ -190,12 +191,11 @@ update the running tray icon and dispose its previous Icon; canceled edits do no
 ## Translation provider regression
 
 `TranslationProvider` defaults to `auto` for old settings. The panel also offers
-`microsoft` and `tencent`; explicit choices bypass the local dictionary and never
+`microsoft`, `tencent` and `deepl`; explicit choices bypass the local dictionary and never
 fall back to another service. Tencent currently outputs Chinese only. Its target
-control is disabled without erasing the last Microsoft target. Automatic mode
+control is disabled without erasing the last target. Automatic mode
 retains the existing Chinese dictionary and Tencent fallback behavior even when
-Microsoft's target is another language. No new endpoints or credential fields
-are introduced.
+Microsoft's target is another language. DeepL is never part of automatic fallback.
 
 The offline self-test uses an injected HTTP handler to verify routing, automatic
 fallback, explicit-provider failure, provider/target cache separation, canceled
@@ -203,3 +203,41 @@ in-flight responses, and settings save/cancel/reopen/live application. It makes
 no network requests. Applying settings uses the existing capture/request
 cancellation path before any new translation. Live service availability is not
 covered by these fixture tests.
+
+
+## Optional DeepL API
+
+DeepL uses only `POST https://api.deepl.com/v2/translate` or
+`POST https://api-free.deepl.com/v2/translate`, with `DeepL-Auth-Key` Authorization.
+The key suffix `:fx` selects the latter, following the official
+[authentication guide](https://developers.deepl.com/docs/getting-started/auth) and
+[SDK endpoint selection](https://github.com/DeepLcom/deepl-dotnet/blob/main/DeepL/Translator.cs).
+This does not infer a host from plan marketing names. DeepL says its API documentation
+applies to all plans. Its [current plans](https://support.deepl.com/hc/en-us/articles/360021200939-DeepL-API-plans)
+include Developer (a total, non-resetting allowance), Growth and Enterprise;
+legacy Free/Pro are no longer sold. The app does not promise a recurring free quota.
+Region-specific Enterprise endpoints are not included in this implementation.
+No custom URL, redirect, automatic retry or automatic switch to/from DeepL is allowed.
+`zh-Hans` and `zh-Hant` normalize to `ZH-HANS` and `ZH-HANT`.
+
+`deepl-key.bin` contains only current-user DPAPI ciphertext. It is excluded from Git
+and release artifacts. Plaintext is not serialized into settings, logs, error messages,
+previews or test reports. Opening settings checks only file existence and never fills
+the PasswordBox with a stored key. Replacement/clear is staged until Save; config-save
+failure attempts to restore the previous encrypted file. Rollback failure is reported.
+This is not a crash-atomic transaction across config, credentials and startup state.
+DPAPI protects storage from other users, not processes already running as that user;
+the key necessarily exists briefly in managed memory and the outgoing auth header.
+The controller cancels pending translations on settings application. The DeepL client
+also rejects a response if credentials changed during its request, checks credentials
+before cache access and clears its separate cache when the credential scope changes.
+
+Run `./scripts/test-providers.ps1` after building, or run the complete offline self-test.
+The provider test is also a separate CI step. Only fictitious sentinel credentials,
+injected HTTP handlers, a temporary DPAPI file and fake startup registration are used.
+Coverage includes zero requests without a key, default/explicit routing, both hosts,
+Chinese targets, provider/target/credential cache isolation, authentication failures,
+quota exhaustion, 429, invalid targets, request size, malformed responses, timeout,
+network failure, cancellation, stale responses, and save/clear/cancel/reopen/rollback.
+No live DeepL account, registration, key validation or billed request is exercised.
+The generated settings previews show an empty credential field.
