@@ -339,7 +339,7 @@ namespace LightTranslate
                 // Capture through the clipboard without UIAutomationClient handles.
                 // Native UIA pattern finalizers caused an access violation during testing.
                 if (!settings.ClipboardFallback || SelectionReader.IsTerminal(processName)) return;
-                string text = await SelectionReader.CopySelection(window, ct, Trace);
+                string text = await SelectionReader.CopySelection(window, ct, Trace, point);
                 Trace("clipboard chars=" + (text == null ? 0 : text.Length));
                 if (!Valid(version, window) || string.IsNullOrWhiteSpace(text)) { Trace("selection discarded valid=" + Valid(version, window)); return; }
                 text = text.Trim();
@@ -689,7 +689,7 @@ namespace LightTranslate
             }
             return english > 0 && english * 100L >= letters * (long)minimumPercent;
         }
-        public static async Task<string> CopySelection(IntPtr window, CancellationToken ct, Action<string> trace)
+        public static async Task<string> CopySelection(IntPtr window, CancellationToken ct, Action<string> trace, Native.POINT? point = null)
         {
             if (Native.GetForegroundWindow() != window || Native.ModifierDown()) { trace("copy skipped focus/modifier"); return null; }
             if (Native.IsPasswordFocus(window)) { trace("password field skipped"); return null; }
@@ -698,7 +698,7 @@ namespace LightTranslate
                     delegate { return !ct.IsCancellationRequested && Native.GetForegroundWindow() == window && !Native.ModifierDown(); },
                     Native.Copy, trace, delegate { return Task.Delay(15); }, async delegate
                     {
-                        string text = await IsolatedSelectionReader.Read(window, ct);
+                        string text = await IsolatedSelectionReader.Read(window, ct, point: point);
                         if (text != null && text.Length >= 65537) throw new SelectionUnavailableException("选中文字较长，请分段选择");
                         if (!ct.IsCancellationRequested && Native.GetForegroundWindow() == window && string.IsNullOrEmpty(text))
                             throw new SelectionUnavailableException();

@@ -8,49 +8,69 @@ using System.Windows.Automation;
 internal static class SelectionHost
 {
     private static Timer deadline;
+    private static string status = "no-text-pattern";
     [MTAThread]
     private static int Main(string[] args)
     {
         // Keep the deadline alive through COM finalization; it may only end this helper.
-        deadline = new Timer(delegate { TerminateProcess(new IntPtr(-1), 3); }, null, 1500, Timeout.Infinite);
+        deadline = new Timer(delegate { try { Console.Error.WriteLine("deadline"); } catch { } TerminateProcess(new IntPtr(-1), 3); }, null, 1500, Timeout.Infinite);
         try
         {
             long rootValue, focusValue; int maximum;
-            if (args.Length != 3 || !long.TryParse(args[0], out rootValue) || !long.TryParse(args[1], out focusValue)
+            if ((args.Length != 3 && args.Length != 5) || !long.TryParse(args[0], out rootValue) || !long.TryParse(args[1], out focusValue)
                 || !int.TryParse(args[2], out maximum) || maximum < 1 || maximum > 65537) return 2;
             IntPtr root = new IntPtr(rootValue), focus = new IntPtr(focusValue);
-            if (root == IntPtr.Zero || focus == IntPtr.Zero || GetAncestor(focus, 2) != root) return 2;
+            if (root == IntPtr.Zero || focus == IntPtr.Zero || GetAncestor(focus, 2) != root) { Console.Error.WriteLine("wrong-root"); return 2; }
             if (GetForegroundWindow() == root)
             {
                 var current = AutomationElement.FocusedElement;
-                if (current != null && current.Current.IsPassword) return 0;
+                if (current != null && current.Current.IsPassword) { Console.Error.WriteLine("password"); return 0; }
             }
             var element = AutomationElement.FromHandle(focus);
-            if (element == null || element.Current.IsPassword) return 0;
-            string text = Read(element, maximum);
+            if (element == null || element.Current.IsPassword) { Console.Error.WriteLine("password"); return 0; }
+            string text = null;
+            // Selecting web text need not move keyboard focus into that document/iframe.
+            // The release point identifies the selected surface without scanning other documents.
+            if (args.Length == 5 && GetForegroundWindow() == root)
+            {
+                int x, y;
+                if (!int.TryParse(args[3], out x) || !int.TryParse(args[4], out y)) return 2;
+                text = ReadAncestors(AutomationElement.FromPoint(new System.Windows.Point(x, y)), root, maximum);
+                if (status == "password") { Console.Error.WriteLine("password"); return 0; }
+            }
+            if (string.IsNullOrEmpty(text)) text = Read(element, maximum);
             // Browsers can expose their actual focused document below the native HWND.
             if (string.IsNullOrEmpty(text) && GetForegroundWindow() == root)
             {
                 var focused = AutomationElement.FocusedElement;
                 if (focused != null && !focused.Current.IsPassword && BelongsTo(focused, root))
-                {
-                    for (int i = 0; i < 8 && focused != null; i++)
-                    {
-                        if (focused.Current.IsPassword || !BelongsTo(focused, root)) break;
-                        text = Read(focused, maximum);
-                        if (!string.IsNullOrEmpty(text)) break;
-                        focused = TreeWalker.ControlViewWalker.GetParent(focused);
-                    }
-                }
+                    text = ReadAncestors(focused, root, maximum);
             }
             if (!string.IsNullOrEmpty(text))
             {
                 Console.OutputEncoding = new UTF8Encoding(false);
                 Console.Write(text);
             }
+            else Console.Error.WriteLine(status);
             return 0;
         }
-        catch { return 2; }
+        catch { Console.Error.WriteLine("provider-error"); return 2; }
+    }
+    private static string ReadAncestors(AutomationElement element, IntPtr root, int maximum)
+    {
+        // Chromium can put many layout groups between focus and its Document.
+        // Stay within the source window, with a depth bound and process deadline.
+        for (int i = 0; i < 32 && element != null; i++)
+        {
+            if (element.Current.IsPassword) { status = "password"; return null; }
+            if (!BelongsTo(element, root)) return null;
+            string text = Read(element, maximum);
+            if (!string.IsNullOrEmpty(text)) return text;
+            if (element.Current.NativeWindowHandle == root.ToInt64()) return null;
+            element = TreeWalker.ControlViewWalker.GetParent(element);
+        }
+        if (element != null) status = "depth-limit";
+        return null;
     }
     private static bool BelongsTo(AutomationElement element, IntPtr root)
     {
@@ -67,6 +87,7 @@ internal static class SelectionHost
         if (element.Current.IsPassword) return null;
         object value;
         if (!element.TryGetCurrentPattern(TextPattern.Pattern, out value)) return null;
+        status = "empty-selection";
         var ranges = ((TextPattern)value).GetSelection();
         if (ranges == null || ranges.Length == 0 || ranges.Length > 8) return null;
         var text = new StringBuilder();

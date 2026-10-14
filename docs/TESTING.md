@@ -262,3 +262,13 @@ The generated settings previews show an empty credential field.
 `./scripts/test-clipboard.ps1 -Native` 在私有 window station 中额外验证真实编辑控件的
 复制命令、原生快照恢复，以及专用格式不会被覆盖；所有数据均为合成数据。
 这些测试不等于已验证每个浏览器、Word、管理员权限窗口或远程桌面的实际兼容性。
+
+### Chromium 选区定位
+
+鼠标拖选网页文字不一定把键盘焦点移到该文档。辅助进程优先从鼠标释放位置的
+UIA 元素向上查找 TextPattern，随后才尝试原生焦点和 UIA 键盘焦点；每一步验证
+源窗口归属，最多查找 32 层，并保留独立进程的总超时限制。它不扫描其他文档、
+不读整个页面或 ValuePattern，也不修改 Chromium 的可访问性设置。
+主程序仅记录固定失败码，例如无 TextPattern、空选区、密码字段、窗口不符、
+深度上限、提供方异常和超时；不记录控件名称、选区原文或页面内容。
+真实控件测试不覆盖网页布局、iframe 与键盘焦点差异，仍须进行实际拖选验收。

@@ -23,7 +23,7 @@ $sourceFiles = @(Get-ChildItem -LiteralPath (Join-Path $PSScriptRoot 'src') -Fil
 if ($LASTEXITCODE -ne 0) { throw 'Compilation failed.' }
 $helperReferences = @('System.dll','System.Core.dll') | ForEach-Object { '/r:' + (Join-Path $framework $_) }
 $helperReferences += @('WindowsBase.dll','UIAutomationClient.dll','UIAutomationTypes.dll') | ForEach-Object { '/r:' + (Join-Path $framework ('WPF\' + $_)) }
-& $compiler /nologo /target:exe /platform:x64 /optimize+ ('/out:' + (Join-Path $outputPath 'LightTranslate.SelectionHost.exe')) @helperReferences (Join-Path $PSScriptRoot 'helpers\SelectionHost.cs')
+& $compiler /nologo /target:exe /platform:x64 /optimize+ ('/out:' + (Join-Path $outputPath 'LightTranslate.SelectionHost.exe')) ('/win32manifest:' + (Join-Path $PSScriptRoot 'src\LightTranslate.manifest')) @helperReferences (Join-Path $PSScriptRoot 'helpers\SelectionHost.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Selection helper compilation failed.' }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'src\LightTranslate.exe.config'),
     (Join-Path $PSScriptRoot 'LICENSE'), (Join-Path $PSScriptRoot 'README.md'),
