@@ -249,7 +249,7 @@ The generated settings previews show an empty credential field.
 但不能因此让划词静默失效。快照失败时，现在通过短时独立进程
 `LightTranslate.SelectionHost.exe` 请求应用的 UIA TextPattern 选区，不读取或修改剪贴板。
 主程序仍不引用 UIAutomationClient，不持有跨进程 UIA/COM 对象，也不恢复原 OLE 快照路径。
-辅助进程只接受源窗口、焦点窗口句柄和长度上限，验证窗口归属并拒绝密码字段；
+辅助进程只接受源窗口、焦点窗口句柄、鼠标释放位置和长度上限，验证窗口归属并拒绝密码字段；
 选区通过匿名标准输出管道返回，不写文件或日志。辅助进程有 1.5 秒的自身终止期限，
 主程序异步等待上限为 2.2 秒，并丢弃已取消或焦点改变后的响应。
 这不是权限沙箱；它隔离 UIA 原生故障，不会终止用户源应用或轻译主进程。
