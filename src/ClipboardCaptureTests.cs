@@ -82,7 +82,7 @@ namespace LightTranslate
             Check(NativeSelectionClipboard.DecodeUnicode(Encoding.Unicode.GetBytes("text\0")) == "text", "bounded Unicode decode");
             Check(NativeSelectionClipboard.DecodeUnicode(new byte[] { 65 }) == null, "odd byte count rejected");
             Check(NativeSelectionClipboard.DecodeUnicode(new byte[] { 65, 0 }) == null, "unterminated text rejected");
-            results["clipboardCapture"] = "14 workflow/decoding checks passed; no system clipboard access";
+            results["clipboardCapture"] = "workflow/race/decoding checks passed; no system clipboard access";
         }
 
         internal static int RunStandalone()

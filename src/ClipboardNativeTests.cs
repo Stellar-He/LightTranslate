@@ -114,6 +114,17 @@ namespace LightTranslate
                     var delayed = new DelayedWindow();
                     try
                     {
+                        Check(ClipboardNative.OpenClipboard(delayed.Handle), "mixed delayed open");
+                        try
+                        {
+                            Check(ClipboardNative.EmptyClipboard(), "mixed delayed empty");
+                            ClipboardNative.SetClipboardData(13, IntPtr.Zero);
+                            var privateData = NativeSelectionClipboard.Allocate(new byte[] { 1, 2, 3 });
+                            if (ClipboardNative.SetClipboardData(unknown, privateData) == IntPtr.Zero)
+                            { ClipboardNative.GlobalFree(privateData); throw new Exception("Private fixture set failed"); }
+                        }
+                        finally { ClipboardNative.CloseClipboard(); }
+                        Check(!clipboard.TrySnapshot(out restored) && delayed.Renders == 0, "unsupported snapshot never requests delayed data");
                         Check(ClipboardNative.OpenClipboard(delayed.Handle), "delayed open");
                         try { Check(ClipboardNative.EmptyClipboard(), "delayed empty"); ClipboardNative.SetClipboardData(13, IntPtr.Zero); }
                         finally { ClipboardNative.CloseClipboard(); }
