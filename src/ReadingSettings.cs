@@ -101,7 +101,7 @@ namespace LightTranslate
         private readonly Action saved;
         private readonly IStartupRegistration startup;
         private readonly CheckBox enabled, clipboard, autoStart;
-        private readonly ComboBox language, fontFamily, fontSize, autoHide;
+        private readonly ComboBox language, provider, fontFamily, fontSize, autoHide;
         private readonly TextBox maxSelection, excludedApps, background, englishPercent;
         private readonly TextBlock error, previewText, startupStatus;
         private readonly Border preview;
@@ -137,9 +137,12 @@ namespace LightTranslate
             clipboard = Toggle("通过剪贴板获取选中文字");
             translation.Children.Add(enabled); translation.Children.Add(clipboard);
             translation.Children.Add(Help("托盘开关立即生效并同步到这里；面板修改在保存后生效。当前仅支持剪贴板取词；关闭后停止划词翻译。取词会临时复制选区；剪贴板含不支持的格式时跳过，不覆盖原内容。"));
+            provider = new ComboBox { ItemsSource = new[] { "自动（微软失败后腾讯）", "仅微软", "仅腾讯（中文）" }, MinHeight = 32 };
+            AddField(translation, "在线翻译服务", provider);
+            translation.Children.Add(Help("自动模式先查本地英汉词库，再请求在线服务；仅微软或仅腾讯会跳过本地词库，不切换服务。现有内置服务无需填写密钥。"));
             language = new ComboBox { IsEditable = true, ItemsSource = Languages, MinHeight = 32 };
             AddField(translation, "目标语言（微软）", language);
-            translation.Children.Add(Help("可直接输入语言代码，如 en、ja。该选项只用于微软在线翻译；本地词库和腾讯备用仍输出中文。"));
+            translation.Children.Add(Help("可直接输入语言代码，如 en、ja。目标语言只对微软有效；自动模式下的本地词库和腾讯回退仍输出中文。仅腾讯固定输出中文。"));
             maxSelection = Input();
             AddField(translation, "选区字符数上限", maxSelection);
             translation.Children.Add(Help("正整数，默认 2,000。超过上限只提示分段选择，不发送该选区。"));
@@ -206,6 +209,7 @@ namespace LightTranslate
             save.Click += delegate { Apply(Path.Combine(Program.Folder, "settings.json")); }; right.Children.Add(save);
             Grid.SetColumn(right, 1); actions.Children.Add(right); footer.Children.Add(actions);
             Grid.SetRow(footer, 2); layout.Children.Add(footer);
+            provider.SelectionChanged += delegate { language.IsEnabled = provider.SelectedIndex != 2; };
             fontFamily.SelectionChanged += delegate { UpdatePreview(); };
             fontSize.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent, new TextChangedEventHandler(delegate { UpdatePreview(); }));
             background.TextChanged += delegate { UpdatePreview(); };
@@ -246,6 +250,7 @@ namespace LightTranslate
         {
             if (error != null) error.Visibility = Visibility.Collapsed;
             enabled.IsChecked = value.Enabled; clipboard.IsChecked = value.ClipboardFallback;
+            provider.SelectedIndex = value.TranslationProvider == "microsoft" ? 1 : value.TranslationProvider == "tencent" ? 2 : 0;
             language.Text = LanguageLabel(value.Target);
             maxSelection.Text = value.MaxSelectionLength.ToString(CultureInfo.CurrentCulture);
             excludedApps.Text = AppsText(value.ExcludedApps);
@@ -315,7 +320,8 @@ namespace LightTranslate
                 return Invalid("最低英文占比请输入 0–100 的整数百分比。", englishPercent, 0);
             var next = settings.Clone();
             next.Enabled = enabled.IsChecked == true; next.ClipboardFallback = clipboard.IsChecked == true;
-            if (language.Text != LanguageLabel(settings.Target))
+            next.TranslationProvider = provider.SelectedIndex == 1 ? "microsoft" : provider.SelectedIndex == 2 ? "tencent" : "auto";
+            if (provider.SelectedIndex != 2 && language.Text != LanguageLabel(settings.Target))
             {
                 string choice = Languages.FirstOrDefault(x => x == language.Text);
                 string code = choice == null ? language.Text.Trim() : choice.Substring(choice.LastIndexOf(" · ", StringComparison.Ordinal) + 3);
@@ -377,6 +383,9 @@ namespace LightTranslate
         { fontSize.Text = size; background.Text = color; autoHide.Text = seconds; englishPercent.Text = percent; }
         internal void SetBehaviorForTest(bool on, bool capture, string target, string maximum, string apps)
         { enabled.IsChecked = on; clipboard.IsChecked = capture; language.Text = target; maxSelection.Text = maximum; excludedApps.Text = apps; }
+        internal void SetProviderForTest(int value) { provider.SelectedIndex = value; }
+        internal int ProviderForTest { get { return provider.SelectedIndex; } }
+        internal bool TargetEnabledForTest { get { return language.IsEnabled; } }
         internal void SetStartupForTest(bool value) { autoStart.IsChecked = value; }
         internal bool EnabledForTest { get { return enabled.IsChecked == true; } }
         internal bool? StartupForTest { get { return autoStart.IsChecked; } }

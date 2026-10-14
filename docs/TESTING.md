@@ -57,6 +57,7 @@ GitHub Actions 会执行编译、词库构建和离线自检，并上传构建�
 |---|---|---|
 | `Enabled` | `true` | 自动划词翻译开关，也可通过托盘修改 |
 | `ClipboardFallback` | `true` | 剪贴板取词开关，关闭后停止取词 |
+| `TranslationProvider` | `auto` | `auto` 保留本地词库优先、微软失败后腾讯；`microsoft` / `tencent` 仅调用选定服务并跳过词库 |
 | `Target` | `zh-Hans` | 微软接口的目标语言；本地词库和腾讯备用接口输出中文 |
 | `MaxSelectionLength` | `2000` | 单次选区字符数上限 |
 | `ExcludedApps` | `[]` | 排除的进程名称，可带或不带 `.exe` |
@@ -185,3 +186,20 @@ are reused; font size is fitted to the icon, independently of bubble text size.
 The test replaces an invisible NotifyIcon 100 times and checks USER handle growth.
 This does not replace a live Explorer tray/DPI test. Saved appearance settings
 update the running tray icon and dispose its previous Icon; canceled edits do not.
+
+## Translation provider regression
+
+`TranslationProvider` defaults to `auto` for old settings. The panel also offers
+`microsoft` and `tencent`; explicit choices bypass the local dictionary and never
+fall back to another service. Tencent currently outputs Chinese only. Its target
+control is disabled without erasing the last Microsoft target. Automatic mode
+retains the existing Chinese dictionary and Tencent fallback behavior even when
+Microsoft's target is another language. No new endpoints or credential fields
+are introduced.
+
+The offline self-test uses an injected HTTP handler to verify routing, automatic
+fallback, explicit-provider failure, provider/target cache separation, canceled
+in-flight responses, and settings save/cancel/reopen/live application. It makes
+no network requests. Applying settings uses the existing capture/request
+cancellation path before any new translation. Live service availability is not
+covered by these fixture tests.

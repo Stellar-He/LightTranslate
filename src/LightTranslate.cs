@@ -43,6 +43,7 @@ namespace LightTranslate
                 }
                 if (args.Length > 0 && args[0] == "--self-test-clipboard") return ClipboardCaptureTests.RunStandalone();
                 if (args.Length > 0 && args[0] == "--self-test-clipboard-native") return ClipboardNativeTests.Run();
+                if (args.Length > 0 && args[0] == "--self-test-providers") return TranslationProviderTests.RunStandalone();
                 if (args.Length > 0 && args[0] == "--self-test") return SelfTest.Run(false);
                 if (args.Length > 0 && args[0] == "--self-test-offline") return SelfTest.Run(true);
                 bool created;
@@ -83,6 +84,7 @@ namespace LightTranslate
         public bool Enabled = true;
         public bool ClipboardFallback = true;
         public string Target = "zh-Hans";
+        public string TranslationProvider = "auto";
         public int MaxSelectionLength = 2000;
         public string[] ExcludedApps = new string[0];
         public bool Diagnostics = false;
@@ -109,6 +111,7 @@ namespace LightTranslate
         }
         internal void NormalizeReading()
         {
+            TranslationProvider = Translator.NormalizeProvider(TranslationProvider);
             BubbleFontFamily = BubbleAppearance.ResolveFont(BubbleFontFamily).Source;
             if (double.IsNaN(BubbleFontSize) || double.IsInfinity(BubbleFontSize) || BubbleFontSize < 10 || BubbleFontSize > 48) BubbleFontSize = 14;
             Color color;
@@ -127,7 +130,7 @@ namespace LightTranslate
         internal void CopyUserFrom(Settings other)
         {
             Enabled = other.Enabled; ClipboardFallback = other.ClipboardFallback;
-            Target = other.Target; MaxSelectionLength = other.MaxSelectionLength;
+            Target = other.Target; TranslationProvider = other.TranslationProvider; MaxSelectionLength = other.MaxSelectionLength;
             ExcludedApps = other.ExcludedApps == null ? null : (string[])other.ExcludedApps.Clone();
             CopyReadingFrom(other);
             if (Changed != null) Changed();
@@ -184,7 +187,7 @@ namespace LightTranslate
             settings = Settings.Load();
             lexicon = new Lexicon(Program.Folder);
             translator = new Translator();
-            var warming = translator.WarmConnection();
+            if (settings.TranslationProvider != "tencent") { var warming = translator.WarmConnection(); }
             bubble = new Bubble();
             bubble.ApplySettings(settings);
             tray = new Forms.NotifyIcon { Text = "轻译 · 选中即译", Icon = MakeIcon(settings), Visible = true };
@@ -346,13 +349,15 @@ namespace LightTranslate
                     ShowText("选中文字较长，请分段选择", point, 5);
                     return;
                 }
-                string translated = lexicon.Lookup(text);
-                if (translated != null || translator.TryCached(text, settings.Target, out translated))
+                string provider = Translator.NormalizeProvider(settings.TranslationProvider);
+                string target = settings.Target;
+                string translated = provider == "auto" ? lexicon.Lookup(text) : null;
+                if (translated != null || translator.TryCached(text, target, out translated, provider))
                 {
                     ShowText(translated, point, ReadingSeconds(translated), true);
                     return;
                 }
-                var request = translator.Translate(text, settings.Target, ct);
+                var request = translator.Translate(text, target, ct, provider);
                 if (await Task.WhenAny(request, Task.Delay(220, ct)) != request && Valid(version, window))
                     ShowText("…", point, 8);
                 translated = await request;
@@ -906,9 +911,11 @@ namespace LightTranslate
         private readonly JavaScriptSerializer json = new JavaScriptSerializer();
         private readonly Dictionary<string, string> cache = new Dictionary<string, string>();
         private readonly Queue<string> eviction = new Queue<string>();
-        public Translator()
+        public Translator() : this(null) { }
+        internal Translator(HttpMessageHandler handler)
         {
-            http = new HttpClient { Timeout = TimeSpan.FromSeconds(7) };
+            http = handler == null ? new HttpClient() : new HttpClient(handler);
+            http.Timeout = TimeSpan.FromSeconds(7);
             http.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
             http.DefaultRequestHeaders.ExpectContinue = false;
         }
@@ -921,20 +928,32 @@ namespace LightTranslate
             }
             catch { }
         }
-        public bool TryCached(string text, string target, out string result) { return cache.TryGetValue(target + "\n" + text, out result); }
-        public async Task<string> Translate(string text, string target, CancellationToken ct)
+        internal static string NormalizeProvider(string provider)
+        { return provider == "microsoft" || provider == "tencent" ? provider : "auto"; }
+        private static string CacheKey(string text, string target, string provider)
+        { return NormalizeProvider(provider) + "\n" + (provider == "tencent" ? "zh" : target) + "\n" + text; }
+        public bool TryCached(string text, string target, out string result, string provider = "auto")
+        { return cache.TryGetValue(CacheKey(text, target, provider), out result); }
+        public async Task<string> Translate(string text, string target, CancellationToken ct, string provider = "auto")
         {
+            ct.ThrowIfCancellationRequested();
+            provider = NormalizeProvider(provider);
             string result;
-            if (TryCached(text, target, out result)) return result;
-            bool fallback = false;
-            result = null;
-            try { result = await Microsoft(text, target, ct); }
-            catch (OperationCanceledException) { if (ct.IsCancellationRequested) throw; fallback = true; }
-            catch { ct.ThrowIfCancellationRequested(); fallback = true; }
-            if (fallback) result = await Tencent(text, ct);
+            if (TryCached(text, target, out result, provider)) return result;
+            if (provider == "tencent") result = await Tencent(text, ct);
+            else if (provider == "microsoft") result = await Microsoft(text, target, ct);
+            else
+            {
+                bool fallback = false;
+                result = null;
+                try { result = await Microsoft(text, target, ct); }
+                catch (OperationCanceledException) { if (ct.IsCancellationRequested) throw; fallback = true; }
+                catch { ct.ThrowIfCancellationRequested(); fallback = true; }
+                if (fallback) result = await Tencent(text, ct);
+            }
             if (string.IsNullOrWhiteSpace(result)) throw new InvalidDataException("Empty translation");
             ct.ThrowIfCancellationRequested();
-            string key = target + "\n" + text;
+            string key = CacheKey(text, target, provider);
             if (!cache.ContainsKey(key))
             {
                 if (cache.Count >= 256) cache.Remove(eviction.Dequeue());
@@ -1128,6 +1147,7 @@ namespace LightTranslate
             TrayIconRenderer.Test(results);
             ReadingSettingsTests.Run(results);
             UnifiedSettingsTests.Run(results);
+            TranslationProviderTests.Run(results);
             Program.Log("self-test", "dictionary and clipboard snapshot passed");
             if (System.Reflection.Assembly.GetExecutingAssembly().GetReferencedAssemblies().Any(a => a.Name == "UIAutomationClient"))
                 throw new Exception("Unsafe UIA client dependency remains");
