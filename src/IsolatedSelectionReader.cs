@@ -13,9 +13,37 @@ namespace LightTranslate
     {
         internal SelectionUnavailableException(string message = "剪贴板无法安全备份，已保留原内容；当前应用暂时无法读取选区。") : base(message) { }
     }
+    internal enum SelectionReadState { Selected, Empty, Unsupported, Blocked, Timeout, Failed }
+    internal sealed class SelectionReadResult
+    {
+        internal SelectionReadState State;
+        internal string Text;
+        internal SelectionReadResult(SelectionReadState state, string text = null) { State = state; Text = text; }
+        internal string ForCapture()
+        {
+            if (State == SelectionReadState.Empty || State == SelectionReadState.Blocked) return string.Empty;
+            if (State != SelectionReadState.Selected) throw new SelectionUnavailableException();
+            if (Text.Length >= 65537) throw new SelectionUnavailableException("选中文字较长，请分段选择");
+            return Text;
+        }
+    }
     internal static class IsolatedSelectionReader
     {
         internal static async Task<string> Read(IntPtr window, CancellationToken ct, int maximum = 65537, IntPtr focus = default(IntPtr), Native.POINT? point = null)
+        { return (await ReadResult(window, ct, maximum, focus, point)).Text; }
+
+        internal static SelectionReadResult Decode(int exitCode, string status, string text, int maximum)
+        {
+            if (status == "deadline") return new SelectionReadResult(SelectionReadState.Timeout);
+            if (exitCode != 0 || text.Length > maximum) return new SelectionReadResult(SelectionReadState.Failed);
+            if (status == "password") return new SelectionReadResult(SelectionReadState.Blocked, string.Empty);
+            if (text.Length != 0 && status == "selected") return new SelectionReadResult(SelectionReadState.Selected, text);
+            if (text.Length == 0 && status == "empty-selection") return new SelectionReadResult(SelectionReadState.Empty, string.Empty);
+            if (status == "no-text-pattern") return new SelectionReadResult(SelectionReadState.Unsupported);
+            return new SelectionReadResult(SelectionReadState.Failed);
+        }
+
+        internal static async Task<SelectionReadResult> ReadResult(IntPtr window, CancellationToken ct, int maximum = 65537, IntPtr focus = default(IntPtr), Native.POINT? point = null)
         {
             ct.ThrowIfCancellationRequested();
             if (focus == IntPtr.Zero)
@@ -27,7 +55,7 @@ namespace LightTranslate
                 focus = Native.GetGUIThreadInfo(thread, ref info) && info.focus != IntPtr.Zero ? info.focus : window;
             }
             string path = Path.Combine(Program.Folder, "LightTranslate.SelectionHost.exe");
-            if (focus == IntPtr.Zero || !File.Exists(path)) { Program.Log("selection-helper", "missing-helper-or-window"); return null; }
+            if (focus == IntPtr.Zero || !File.Exists(path)) { Program.Log("selection-helper", "missing-helper-or-window"); return new SelectionReadResult(SelectionReadState.Failed); }
             string arguments = window.ToInt64().ToString(CultureInfo.InvariantCulture) + " " + focus.ToInt64().ToString(CultureInfo.InvariantCulture) + " " + maximum.ToString(CultureInfo.InvariantCulture);
             if (point.HasValue) arguments += " " + point.Value.x.ToString(CultureInfo.InvariantCulture) + " " + point.Value.y.ToString(CultureInfo.InvariantCulture);
             var start = new ProcessStartInfo(path, arguments)
@@ -41,19 +69,19 @@ namespace LightTranslate
                     // The helper self-exits on timeout; never terminate the user's application.
                     bool exited = await Task.Run(delegate { return process.WaitForExit(3800); });
                     ct.ThrowIfCancellationRequested();
-                    if (!exited) { Program.Log("selection-helper", "wait-timeout"); return null; }
+                    if (!exited) { Program.Log("selection-helper", "wait-timeout"); return new SelectionReadResult(SelectionReadState.Timeout); }
                     string status = (await diagnostic).Trim();
                     // Only fixed status codes enter logs, never provider text or selected content.
-                    if (status != "no-text-pattern" && status != "empty-selection" && status != "password"
+                    if (status != "selected" && status != "no-text-pattern" && status != "empty-selection" && status != "password"
                         && status != "wrong-root" && status != "deadline" && status != "provider-error" && status != "depth-limit") status = "unknown";
-                    if (process.ExitCode != 0) { Program.Log("selection-helper", "exit=" + process.ExitCode + " status=" + status); return null; }
+                    if (process.ExitCode != 0) Program.Log("selection-helper", "exit=" + process.ExitCode + " status=" + status);
                     string text = await output;
                     if (string.IsNullOrEmpty(text)) Program.Log("selection-helper", "status=" + status);
-                    return text.Length <= maximum ? text : null;
+                    return Decode(process.ExitCode, status, text, maximum);
                 }
             }
             catch (OperationCanceledException) { throw; }
-            catch { Program.Log("selection-helper", "launch-or-pipe-error"); return null; }
+            catch { Program.Log("selection-helper", "launch-or-pipe-error"); return new SelectionReadResult(SelectionReadState.Failed); }
         }
     }
 }

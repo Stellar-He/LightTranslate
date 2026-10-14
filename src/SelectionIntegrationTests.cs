@@ -28,10 +28,61 @@ namespace LightTranslate
             if (!task.IsCompleted) throw new Exception("Selection integration timed out");
             return task.GetAwaiter().GetResult();
         }
+        private static string Capture(ProtectedClipboard clipboard, IntPtr root, IntPtr focus)
+        {
+            return Pump(ClipboardCapture.Read(clipboard, root, delegate { return true; },
+                delegate { clipboard.Copies++; }, delegate { }, delegate { return Task.Delay(15); },
+                async delegate { return (await IsolatedSelectionReader.ReadResult(root, CancellationToken.None, 2001, focus)).ForCapture(); }));
+        }
+
+        private static void ExpectFailure(SelectionReadResult result, SelectionReadState state)
+        {
+            ClipboardCaptureTests.Check(result.State == state, "fixed helper failure classification " + state);
+            bool explained = false;
+            try { result.ForCapture(); } catch (SelectionUnavailableException) { explained = true; }
+            ClipboardCaptureTests.Check(explained, "real failures retain error prompt " + state);
+        }
+
+        private static void EmptySelectionCases(Forms.TextBoxBase edit, List<string> passed)
+        {
+            using (var form = new Forms.Form())
+            using (edit)
+            {
+                edit.Text = "prefix reversible suffix";
+                form.Controls.Add(edit);
+                IntPtr root = form.Handle, focus = edit.Handle;
+                var clipboard = new ProtectedClipboard();
+                edit.Select(7, 10);
+                ClipboardCaptureTests.Check(Capture(clipboard, root, focus) == "reversible", "selected word before collapse");
+                foreach (string scenario in new[] { "end-of-document empty drag result", "middle collapsed caret", "empty document" })
+                {
+                    if (scenario == "empty document") edit.Text = string.Empty;
+                    edit.Select(scenario == "middle collapsed caret" ? 5 : edit.TextLength, 0);
+                    SelectionReadResult result = Pump(IsolatedSelectionReader.ReadResult(root, CancellationToken.None, 2001, focus));
+                    ClipboardCaptureTests.Check(result.State == SelectionReadState.Empty, "successful empty selection classified " + scenario);
+                    string selected = Capture(clipboard, root, focus);
+                    ClipboardCaptureTests.Check(selected == string.Empty && !SelectionReader.ShouldTranslate(selected, 25), "empty selection silently ends without stale text " + scenario);
+                    passed.Add(edit.GetType().Name + ": " + scenario);
+                }
+                edit.Text = "prefix reversible suffix"; edit.Select(7, 10);
+                ClipboardCaptureTests.Check(Capture(clipboard, root, focus) == "reversible", "normal selection still works after empty gestures");
+                ClipboardCaptureTests.Check(clipboard.Copies == 0 && clipboard.Reads == 0 && clipboard.Restores == 0, "empty gestures never copy or read stale clipboard");
+            }
+        }
         internal static int Run()
         {
             uint before = Native.GetClipboardSequenceNumber();
             var results = new Dictionary<string, object>();
+            var emptyCases = new List<string>();
+            EmptySelectionCases(new Forms.TextBox { Multiline = true }, emptyCases);
+            EmptySelectionCases(new Forms.RichTextBox(), emptyCases);
+            ExpectFailure(IsolatedSelectionReader.Decode(0, "no-text-pattern", "", 20), SelectionReadState.Unsupported);
+            ExpectFailure(IsolatedSelectionReader.Decode(3, "deadline", "", 20), SelectionReadState.Timeout);
+            ExpectFailure(IsolatedSelectionReader.Decode(2, "provider-error", "", 20), SelectionReadState.Failed);
+            ExpectFailure(IsolatedSelectionReader.Decode(2, "empty-selection", "", 20), SelectionReadState.Failed);
+            ExpectFailure(IsolatedSelectionReader.Decode(0, "unknown", "", 20), SelectionReadState.Failed);
+            using (var unsupported = new Forms.Form())
+                ExpectFailure(Pump(IsolatedSelectionReader.ReadResult(unsupported.Handle, CancellationToken.None, 2001, unsupported.Handle)), SelectionReadState.Unsupported);
             using (var form = new Forms.Form())
             using (var text = new Forms.TextBox { Multiline = true, Text = "prefix reversible suffix" })
             {
@@ -39,9 +90,7 @@ namespace LightTranslate
                 IntPtr root = form.Handle, focus = text.Handle;
                 text.Select(7, 10);
                 var clipboard = new ProtectedClipboard();
-                string selected = Pump(ClipboardCapture.Read(clipboard, root, delegate { return true; },
-                    delegate { clipboard.Copies++; }, delegate { }, delegate { return Task.Delay(15); },
-                    delegate { return IsolatedSelectionReader.Read(root, CancellationToken.None, 2001, focus); }));
+                string selected = Capture(clipboard, root, focus);
                 ClipboardCaptureTests.Check(selected == "reversible", "real edit selection through protected clipboard fallback");
                 ClipboardCaptureTests.Check(clipboard.Copies == 0 && clipboard.Reads == 0 && clipboard.Restores == 0, "protected clipboard untouched");
                 ClipboardCaptureTests.Check(SelectionReader.ShouldTranslate(selected, 25), "selected English passes real language gate");
@@ -64,6 +113,8 @@ namespace LightTranslate
                 }
             }
             results["selectionIntegration"] = "real Windows edit selection -> external UIA helper -> protected clipboard fallback -> language gate -> local dictionary; empty/password/wrong-root/canceled/length cases passed; no network or clipboard contents accessed";
+            results["emptySelectionCases"] = emptyCases;
+            results["failureClassification"] = "unsupported, deadline, provider error, nonzero exit with empty status, unknown status retain errors; successful empty selections are silent";
             results["clipboardSequenceUnchanged"] = before == Native.GetClipboardSequenceNumber();
             File.WriteAllText(Path.Combine(Program.Folder, "selection-integration-test.json"), new JavaScriptSerializer().Serialize(results));
             return 0;

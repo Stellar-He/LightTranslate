@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Windows.Automation;
+using System.Windows.Automation.Text;
 
 // A short-lived process owns every UIA/COM object. No clipboard API, file output or network.
 internal static class SelectionHost
@@ -38,9 +39,11 @@ internal static class SelectionHost
                 text = ReadAncestors(AutomationElement.FromPoint(new System.Windows.Point(x, y)), root, maximum);
                 if (status == "password") { Console.Error.WriteLine("password"); return 0; }
             }
-            if (string.IsNullOrEmpty(text)) text = Read(element, maximum);
+            // null means unsupported/unresolved; empty means a successful, authoritative
+            // empty selection. Do not replace an empty pointer selection with stale focus text.
+            if (text == null) text = Read(element, maximum);
             // Browsers can expose their actual focused document below the native HWND.
-            if (string.IsNullOrEmpty(text) && GetForegroundWindow() == root)
+            if (text == null && GetForegroundWindow() == root)
             {
                 var focused = AutomationElement.FocusedElement;
                 if (focused != null && !focused.Current.IsPassword && BelongsTo(focused, root))
@@ -50,6 +53,7 @@ internal static class SelectionHost
             {
                 Console.OutputEncoding = new UTF8Encoding(false);
                 Console.Write(text);
+                Console.Error.WriteLine("selected");
             }
             else Console.Error.WriteLine(status);
             return 0;
@@ -65,7 +69,7 @@ internal static class SelectionHost
             if (element.Current.IsPassword) { status = "password"; return null; }
             if (!BelongsTo(element, root)) return null;
             string text = Read(element, maximum);
-            if (!string.IsNullOrEmpty(text)) return text;
+            if (text != null) return text;
             if (element.Current.NativeWindowHandle == root.ToInt64()) return null;
             element = TreeWalker.ControlViewWalker.GetParent(element);
         }
@@ -84,18 +88,24 @@ internal static class SelectionHost
     }
     private static string Read(AutomationElement element, int maximum)
     {
-        if (element.Current.IsPassword) return null;
+        if (element.Current.IsPassword) { status = "password"; return string.Empty; }
         object value;
         if (!element.TryGetCurrentPattern(TextPattern.Pattern, out value)) return null;
-        status = "empty-selection";
         var ranges = ((TextPattern)value).GetSelection();
-        if (ranges == null || ranges.Length == 0 || ranges.Length > 8) return null;
+        if (ranges == null || ranges.Length > 8) throw new InvalidOperationException();
+        status = "empty-selection";
+        if (ranges.Length == 0) return string.Empty;
         var text = new StringBuilder();
         foreach (var range in ranges)
         {
+            // A caret range is not a selection, even if a provider's GetText returns
+            // an adjacent character. Multiple collapsed ranges must not create newlines.
+            if (range.CompareEndpoints(TextPatternRangeEndpoint.Start, range, TextPatternRangeEndpoint.End) == 0) continue;
+            string part = range.GetText(maximum - text.Length);
+            if (string.IsNullOrEmpty(part)) continue;
             if (text.Length != 0) text.Append('\n');
             if (text.Length >= maximum) break;
-            text.Append(range.GetText(maximum - text.Length));
+            text.Append(part.Substring(0, Math.Min(part.Length, maximum - text.Length)));
         }
         return text.ToString();
     }

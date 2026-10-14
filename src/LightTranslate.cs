@@ -704,10 +704,9 @@ namespace LightTranslate
                     delegate { return !ct.IsCancellationRequested && Native.GetForegroundWindow() == window && !Native.ModifierDown(); },
                     Native.Copy, trace, delegate { return Task.Delay(15); }, async delegate
                     {
-                        string text = await IsolatedSelectionReader.Read(window, ct, point: point);
-                        if (text != null && text.Length >= 65537) throw new SelectionUnavailableException("选中文字较长，请分段选择");
-                        if (!ct.IsCancellationRequested && Native.GetForegroundWindow() == window && string.IsNullOrEmpty(text))
-                            throw new SelectionUnavailableException();
+                        SelectionReadResult result = await IsolatedSelectionReader.ReadResult(window, ct, point: point);
+                        if (ct.IsCancellationRequested || Native.GetForegroundWindow() != window) return null;
+                        string text = result.ForCapture();
                         trace("selection helper chars=" + (text == null ? 0 : text.Length));
                         return text;
                     });
