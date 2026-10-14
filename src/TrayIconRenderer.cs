@@ -12,6 +12,12 @@ namespace LightTranslate
 {
     internal static class TrayIconRenderer
     {
+        internal static int RunStandalone()
+        {
+            var results = new Dictionary<string, object>(); Test(results);
+            File.WriteAllText(Path.Combine(Program.Folder, "tray-test.json"), new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(results));
+            return 0;
+        }
         internal static BitmapSource Render(Settings settings, int size)
         {
             var background = BubbleAppearance.Background(settings.BubbleBackground);

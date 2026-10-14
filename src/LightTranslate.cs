@@ -44,6 +44,7 @@ namespace LightTranslate
                 if (args.Length > 0 && args[0] == "--self-test-clipboard") return ClipboardCaptureTests.RunStandalone();
                 if (args.Length > 0 && args[0] == "--self-test-clipboard-native") return ClipboardNativeTests.Run();
                 if (args.Length > 0 && args[0] == "--self-test-providers") return TranslationProviderTests.RunStandalone();
+                if (args.Length > 0 && args[0] == "--self-test-tray") return TrayIconRenderer.RunStandalone();
                 if (args.Length > 0 && args[0] == "--self-test") return SelfTest.Run(false);
                 if (args.Length > 0 && args[0] == "--self-test-offline") return SelfTest.Run(true);
                 bool created;
