@@ -112,9 +112,23 @@ namespace LightTranslate
                 for (int i = 0; i < 100; i++) Update(tray, new Settings { BubbleBackground = colors[i % colors.Length], BubbleFontFamily = fonts[i % fonts.Length] });
                 uint after = GetGuiResources(process.Handle, 1);
                 if (after > before + 2) throw new Exception("Tray icon handle leak");
+                string path = Path.Combine(Program.Folder, "self-test-icon-" + Guid.NewGuid().ToString("N") + ".json");
+                try
+                {
+                    var settings = new Settings(); int updates = 0;
+                    var editor = new SettingsWindow(settings, delegate { Update(tray, settings); updates++; }, new FakeStartupRegistration());
+                    editor.SetInputForTest("14", "#3870D2", "0", "0");
+                    if (!editor.Apply(path) || updates != 1 || settings.BubbleBackground != "#3870D2")
+                        throw new Exception("Tray appearance save failed");
+                    var reopened = new SettingsWindow(Settings.Load(path), delegate { updates++; }, new FakeStartupRegistration());
+                    reopened.SetInputForTest("14", "#FFFFFF", "0", "0"); reopened.Close();
+                    if (updates != 1 || Settings.Load(path).BubbleBackground != "#3870D2")
+                        throw new Exception("Canceled appearance changed tray settings");
+                }
+                finally { if (File.Exists(path)) File.Delete(path); }
                 tray.Icon.Dispose(); tray.Icon = null;
             }
-            results["trayIcon"] = "six sizes, three fonts/colors rendered; 100 replacements without USER handle growth";
+            results["trayIcon"] = "six sizes, three fonts/colors rendered; save/reopen/cancel passed; 100 replacements without USER handle growth";
         }
 
         [DllImport("user32.dll")] private static extern uint GetGuiResources(IntPtr process, uint flags);
