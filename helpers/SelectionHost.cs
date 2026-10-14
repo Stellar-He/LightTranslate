@@ -10,11 +10,12 @@ internal static class SelectionHost
 {
     private static Timer deadline;
     private static string status = "no-text-pattern";
+    private static volatile bool textContext;
     [MTAThread]
     private static int Main(string[] args)
     {
         // Keep the deadline alive through COM finalization; it may only end this helper.
-        deadline = new Timer(delegate { try { Console.Error.WriteLine("deadline"); } catch { } TerminateProcess(new IntPtr(-1), 3); }, null, 3000, Timeout.Infinite);
+        deadline = new Timer(delegate { try { Console.Error.WriteLine(textContext ? "text-deadline" : "deadline"); } catch { } TerminateProcess(new IntPtr(-1), 3); }, null, 3000, Timeout.Infinite);
         try
         {
             long rootValue, focusValue; int maximum;
@@ -36,8 +37,13 @@ internal static class SelectionHost
             {
                 int x, y;
                 if (!int.TryParse(args[3], out x) || !int.TryParse(args[4], out y)) return 2;
-                text = ReadAncestors(AutomationElement.FromPoint(new System.Windows.Point(x, y)), root, maximum);
+                var hit = AutomationElement.FromPoint(new System.Windows.Point(x, y));
+                bool inSource = hit != null && BelongsTo(hit, root);
+                text = ReadAncestors(hit, root, maximum);
                 if (status == "password") { Console.Error.WriteLine("password"); return 0; }
+                // A successfully inspected pointer surface with no text evidence is not
+                // permission to read a different control's stale keyboard selection.
+                if (inSource && text == null && status != "text-unsupported") text = string.Empty;
             }
             // null means unsupported/unresolved; empty means a successful, authoritative
             // empty selection. Do not replace an empty pointer selection with stale focus text.
@@ -58,7 +64,7 @@ internal static class SelectionHost
             else Console.Error.WriteLine(status);
             return 0;
         }
-        catch { Console.Error.WriteLine("provider-error"); return 2; }
+        catch { Console.Error.WriteLine(textContext ? "text-provider-error" : "provider-error"); return 2; }
     }
     private static string ReadAncestors(AutomationElement element, IntPtr root, int maximum)
     {
@@ -80,6 +86,7 @@ internal static class SelectionHost
             // A web list can belong to a selectable Document: do not blacklist its app.
             if (type == ControlType.Edit || type == ControlType.Document)
             {
+                textContext = true;
                 string text = Read(element, maximum);
                 if (text == null) status = "text-unsupported";
                 return text;
@@ -128,6 +135,7 @@ internal static class SelectionHost
         if (element.Current.IsPassword) { status = "password"; return string.Empty; }
         object value;
         if (!element.TryGetCurrentPattern(TextPattern.Pattern, out value)) return null;
+        textContext = true;
         var ranges = ((TextPattern)value).GetSelection();
         if (ranges == null || ranges.Length > 8) throw new InvalidOperationException();
         status = "empty-selection";

@@ -73,8 +73,33 @@ namespace LightTranslate
                     check("inline edit inside item list remains selectable text", Acquire(probe(rename), clipboard) == "reversible");
                     check("inline edit selection avoids clipboard", clipboard.Snapshots == 0 && clipboard.Copies == 0);
                 }
+                foreach (Forms.Control surface in new Forms.Control[] {
+                    new Forms.Panel(), new Forms.GroupBox(), new Forms.Button { Text = "synthetic action" },
+                    new Forms.Label { Text = "synthetic notification" }, new Forms.MonthCalendar(),
+                    new Forms.TrackBar(), new Forms.CheckBox { Text = "synthetic setting" } })
+                using (surface)
+                {
+                    form.Controls.Add(surface); IntPtr handle = surface.Handle;
+                    SelectionReadResult result = probe(surface);
+                    check(surface.GetType().Name + " has no confirmed selectable text", result.State == SelectionReadState.NonText || result.State == SelectionReadState.Unconfirmed);
+                    var clipboard = new Clipboard();
+                    check(surface.GetType().Name + " gesture quietly ends without stale text", Acquire(result, clipboard) == string.Empty);
+                    check(surface.GetType().Name + " never touches clipboard", clipboard.Snapshots == 0 && clipboard.Copies == 0 && clipboard.Reads == 0 && clipboard.Restores == 0);
+                }
+                using (var panel = new Forms.Panel())
+                using (var edit = new Forms.TextBox { Text = "reversible" })
+                {
+                    form.Controls.Add(panel); panel.Controls.Add(edit); IntPtr panelHandle = panel.Handle, editHandle = edit.Handle;
+                    edit.SelectAll(); var clipboard = new Clipboard();
+                    check("text edit inside generic flyout panel remains usable", Acquire(probe(edit), clipboard) == "reversible" && clipboard.Snapshots == 0);
+                }
             }
-            foreach (SelectionReadState state in new[] { SelectionReadState.Unsupported, SelectionReadState.Timeout, SelectionReadState.Failed })
+            foreach (SelectionReadState state in new[] { SelectionReadState.Unconfirmed, SelectionReadState.ProbeTimeout, SelectionReadState.ProbeFailed })
+            {
+                var clipboard = new Clipboard();
+                check(state + " quietly ends before clipboard access", Acquire(new SelectionReadResult(state), clipboard) == string.Empty && clipboard.Snapshots == 0 && clipboard.Copies == 0);
+            }
+            foreach (SelectionReadState state in new[] { SelectionReadState.Timeout, SelectionReadState.Failed })
             {
                 var clipboard = new Clipboard(); bool error = false;
                 try { Acquire(new SelectionReadResult(state), clipboard); } catch (SelectionUnavailableException) { error = true; }
@@ -99,7 +124,7 @@ namespace LightTranslate
             check("overlapping gestures do not launch another helper", second == null && SelectionIntegrationTests.Pump(first) == string.Empty && probes == 1);
             File.WriteAllText(Path.Combine(Program.Folder, "selection-context-test.json"), new JavaScriptSerializer().Serialize(new {
                 passed, clipboardSequenceUnchanged = before == Native.GetClipboardSequenceNumber(),
-                scope = "Owned hidden ListView, TreeView and inline Edit; real external UIA; synthetic gesture contexts, no user icons or files moved"
+                scope = "Owned hidden lists, tree, edit, panel, group, button, static label, calendar, slider and checkbox; real external UIA; no actual shell actions, notifications or settings touched"
             }));
             return 0;
         }

@@ -44,6 +44,11 @@ namespace LightTranslate
             try { result.ForCapture(); } catch (SelectionUnavailableException) { explained = true; }
             ClipboardCaptureTests.Check(explained, "real failures retain error prompt " + state);
         }
+        private static void ExpectUnconfirmed(SelectionReadResult result, SelectionReadState state)
+        {
+            ClipboardCaptureTests.Check(result.State == state && result.ForCapture() == string.Empty,
+                "unconfirmed text context stays quiet with diagnostic state " + state);
+        }
 
         private static void EmptySelectionCases(Forms.TextBoxBase edit, List<string> passed)
         {
@@ -78,13 +83,16 @@ namespace LightTranslate
             var emptyCases = new List<string>();
             EmptySelectionCases(new Forms.TextBox { Multiline = true }, emptyCases);
             EmptySelectionCases(new Forms.RichTextBox(), emptyCases);
-            ExpectFailure(IsolatedSelectionReader.Decode(0, "no-text-pattern", "", 20), SelectionReadState.Unsupported);
-            ExpectFailure(IsolatedSelectionReader.Decode(3, "deadline", "", 20), SelectionReadState.Timeout);
-            ExpectFailure(IsolatedSelectionReader.Decode(2, "provider-error", "", 20), SelectionReadState.Failed);
-            ExpectFailure(IsolatedSelectionReader.Decode(2, "empty-selection", "", 20), SelectionReadState.Failed);
-            ExpectFailure(IsolatedSelectionReader.Decode(0, "unknown", "", 20), SelectionReadState.Failed);
+            ExpectUnconfirmed(IsolatedSelectionReader.Decode(0, "no-text-pattern", "", 20), SelectionReadState.Unconfirmed);
+            ExpectUnconfirmed(IsolatedSelectionReader.Decode(3, "deadline", "", 20), SelectionReadState.ProbeTimeout);
+            ExpectUnconfirmed(IsolatedSelectionReader.Decode(2, "provider-error", "", 20), SelectionReadState.ProbeFailed);
+            ExpectUnconfirmed(IsolatedSelectionReader.Decode(2, "empty-selection", "", 20), SelectionReadState.ProbeFailed);
+            ExpectUnconfirmed(IsolatedSelectionReader.Decode(0, "unknown", "", 20), SelectionReadState.ProbeFailed);
+            ExpectFailure(IsolatedSelectionReader.Decode(3, "text-deadline", "", 20), SelectionReadState.Timeout);
+            ExpectFailure(IsolatedSelectionReader.Decode(2, "text-provider-error", "", 20), SelectionReadState.Failed);
+            ExpectFailure(IsolatedSelectionReader.Decode(0, "text-unsupported", "", 20), SelectionReadState.TextUnsupported);
             using (var unsupported = new Forms.Form())
-                ExpectFailure(Pump(IsolatedSelectionReader.ReadResult(unsupported.Handle, CancellationToken.None, 2001, unsupported.Handle)), SelectionReadState.Unsupported);
+                ExpectUnconfirmed(Pump(IsolatedSelectionReader.ReadResult(unsupported.Handle, CancellationToken.None, 2001, unsupported.Handle)), SelectionReadState.Unconfirmed);
             using (var form = new Forms.Form())
             using (var text = new Forms.TextBox { Multiline = true, Text = "prefix reversible suffix" })
             {
@@ -116,7 +124,7 @@ namespace LightTranslate
             }
             results["selectionIntegration"] = "real Windows edit selection -> external UIA helper -> context gate -> language gate -> local dictionary; empty/password/wrong-root/canceled/length cases passed; no network or clipboard contents accessed";
             results["emptySelectionCases"] = emptyCases;
-            results["failureClassification"] = "unsupported, deadline, provider error, nonzero exit with empty status, unknown status retain errors; successful empty selections are silent";
+            results["failureClassification"] = "unconfirmed context and probe failures stay quiet with fixed diagnostics; confirmed text deadline, provider error and unsupported text retain errors; successful empty selections are silent";
             results["clipboardSequenceUnchanged"] = before == Native.GetClipboardSequenceNumber();
             File.WriteAllText(Path.Combine(Program.Folder, "selection-integration-test.json"), new JavaScriptSerializer().Serialize(results));
             return 0;
