@@ -54,7 +54,6 @@ namespace LightTranslate
         internal static int Run()
         {
             IntPtr previousStation = GetProcessWindowStation();
-            IntPtr previousDesktop = GetThreadDesktop(Native.GetCurrentThreadId());
             // A named station requires administrator membership. A standard user can
             // request an automatically named station only if it does not already exist.
             IntPtr station = CreateWindowStation("LightTranslate-test-" + Guid.NewGuid().ToString("N"), 1, 0x37f, IntPtr.Zero);
@@ -66,7 +65,36 @@ namespace LightTranslate
             {
                 Check(SetProcessWindowStation(station), "select isolated window station");
                 desktop = CreateDesktop("test", IntPtr.Zero, IntPtr.Zero, 0, 0x1ff, IntPtr.Zero);
-                Check(desktop != IntPtr.Zero && SetThreadDesktop(desktop), "select isolated desktop");
+                Check(desktop != IntPtr.Zero, "create isolated desktop: " + Marshal.GetLastWin32Error());
+                Exception failure = null;
+                var worker = new Thread(delegate()
+                {
+                    try
+                    {
+                        // The entry-point STA may already own COM windows. Native clipboard
+                        // APIs need no COM apartment; switch a fresh MTA thread before any UI.
+                        Check(SetThreadDesktop(desktop), "select isolated desktop: " + Marshal.GetLastWin32Error());
+                        RunCases(desktop);
+                    }
+                    catch (Exception error) { failure = error; }
+                });
+                worker.SetApartmentState(ApartmentState.MTA);
+                worker.Start(); worker.Join();
+                if (failure != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+                File.WriteAllText(Path.Combine(Program.Folder, "clipboard-native-test.json"),
+                    new JavaScriptSerializer().Serialize(new { isolation = "private window station", result = "passed", cases = "text, HTML/RTF, exact bytes, empty, unknown, oversized, busy, stale/canceled restore, delayed rendering" }));
+                return 0;
+            }
+            finally
+            {
+                SetProcessWindowStation(previousStation);
+                if (desktop != IntPtr.Zero) CloseDesktop(desktop);
+                CloseWindowStation(station);
+            }
+        }
+
+        private static void RunCases(IntPtr desktop)
+        {
                 using (var clipboard = new NativeSelectionClipboard())
                 {
                     uint html = ClipboardNative.RegisterClipboardFormat("HTML Format");
@@ -136,25 +164,14 @@ namespace LightTranslate
                     }
                     finally { delayed.DestroyHandle(); }
                 }
-                File.WriteAllText(Path.Combine(Program.Folder, "clipboard-native-test.json"),
-                    new JavaScriptSerializer().Serialize(new { isolation = "private window station", result = "passed", cases = "text, HTML/RTF, exact bytes, empty, unknown, oversized, busy, stale/canceled restore, delayed rendering" }));
-                return 0;
-            }
-            finally
-            {
-                SetThreadDesktop(previousDesktop); SetProcessWindowStation(previousStation);
-                if (desktop != IntPtr.Zero) CloseDesktop(desktop);
-                CloseWindowStation(station);
-            }
         }
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr CreateWindowStation(string name, uint flags, uint access, IntPtr security);
         [DllImport("user32.dll")] private static extern IntPtr GetProcessWindowStation();
         [DllImport("user32.dll")] private static extern bool SetProcessWindowStation(IntPtr station);
         [DllImport("user32.dll")] private static extern bool CloseWindowStation(IntPtr station);
-        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern IntPtr CreateDesktop(string name, IntPtr device, IntPtr mode, uint flags, uint access, IntPtr security);
-        [DllImport("user32.dll")] private static extern IntPtr GetThreadDesktop(uint thread);
-        [DllImport("user32.dll")] private static extern bool SetThreadDesktop(IntPtr desktop);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern IntPtr CreateDesktop(string name, IntPtr device, IntPtr mode, uint flags, uint access, IntPtr security);
+        [DllImport("user32.dll", SetLastError = true)] private static extern bool SetThreadDesktop(IntPtr desktop);
         [DllImport("user32.dll")] private static extern bool CloseDesktop(IntPtr desktop);
     }
 }
