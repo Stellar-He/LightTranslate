@@ -1,4 +1,4 @@
-﻿# 开发与测试
+# 开发与测试
 
 ## 构建、自检与打包
 
@@ -56,7 +56,7 @@ GitHub Actions 会执行编译、词库构建和离线自检，并上传构建�
 | 字段 | 默认值 | 作用 |
 |---|---|---|
 | `Enabled` | `true` | 自动划词翻译开关，也可通过托盘修改 |
-| `ClipboardFallback` | `true` | 剪贴板取词开关，关闭后停止取词 |
+| `ClipboardFallback` | `true` | 选区取词开关，关闭后停止所有取词 |
 | `TranslationProvider` | `auto` | `auto` 保留本地词库优先、微软失败后腾讯；`microsoft` / `tencent` / `deepl` 仅调用选定服务并跳过词库 |
 | `Target` | `zh-Hans` | 微软 / DeepL 的目标语言；本地词库和腾讯输出中文 |
 | `MaxSelectionLength` | `2000` | 单次选区字符数上限 |
@@ -73,7 +73,7 @@ GitHub Actions 会执行编译、词库构建和离线自检，并上传构建�
 补充平面的字母按 Unicode 标量计一次，全角 Latin / 重音字母计入分母但不计英文分子。
 大于 0% 时没有 A–Z/a–z 的文本不触发；0% 时无文字字母或纯中文仍被原有规则跳过。
 
-`ClipboardFallback` 沿用早期字段名，当前取词路径统一使用剪贴板。
+`ClipboardFallback` 沿用早期字段名，同时控制剪贴板取词和独立进程选区读取。
 
 面板纳入 `Enabled`、`ClipboardFallback`、`Target`、`MaxSelectionLength`、`ExcludedApps`
 和五项阅读选项。目标语言只校验修改后输入的语言标签语法，不联网获取语言列表；服务是否支持自定义标签由所选服务决定。
@@ -97,7 +97,7 @@ GitHub Actions 会执行编译、词库构建和离线自检，并上传构建�
 
 ## 取词与数据处理
 
-程序使用带内部标记的 `Ctrl+C` 获取选区，并尝试保存、恢复原剪贴板的各格式。
+程序优先使用带内部标记的 `Ctrl+C` 获取选区，快照仅接受支持的文本格式。原剪贴板无法完整安全备份时，改由独立进程读取 UIA 选区，保留剪贴板原内容。
 如果用户或其他应用在取词期间更新了剪贴板，程序会避免覆盖新的内容。
 系统剪贴板历史和第三方剪贴板管理器仍可能保留临时复制记录。
 
@@ -162,7 +162,7 @@ delayed rendering. Both commands run in CI; neither needs the dictionary.
 
 Capture now accepts only HGLOBAL text formats (Unicode/ANSI/OEM text, locale,
 HTML Format and Rich Text Format), at most 64 formats, 8 MiB per format and
-16 MiB total. Unknown or incomplete snapshots skip the selection before Ctrl+C;
+16 MiB total. Unknown or incomplete snapshots bypass Ctrl+C and try the isolated selection helper;
 images, file lists and application-private formats are not silently discarded.
 Delayed rendering may cause a snapshot to be skipped when its version changes.
 A slow native clipboard owner can still delay GetClipboardData. Restore checks
@@ -241,3 +241,24 @@ quota exhaustion, 429, invalid targets, request size, malformed responses, timeo
 network failure, cancellation, stale responses, and save/clear/cancel/reopen/rollback.
 No live DeepL account, registration, key validation or billed request is exercised.
 The generated settings previews show an empty credential field.
+
+
+## 图片或专用格式剪贴板下的选区读取
+
+仅允许文本快照的守卫会拒绝图片和应用专用格式。这是保护原剪贴板所需的行为，
+但不能因此让划词静默失效。快照失败时，现在通过短时独立进程
+`LightTranslate.SelectionHost.exe` 请求应用的 UIA TextPattern 选区，不读取或修改剪贴板。
+主程序仍不引用 UIAutomationClient，不持有跨进程 UIA/COM 对象，也不恢复原 OLE 快照路径。
+辅助进程只接受源窗口、焦点窗口句柄和长度上限，验证窗口归属并拒绝密码字段；
+选区通过匿名标准输出管道返回，不写文件或日志。辅助进程有 1.5 秒的自身终止期限，
+主程序异步等待上限为 2.2 秒，并丢弃已取消或焦点改变后的响应。
+这不是权限沙箱；它隔离 UIA 原生故障，不会终止用户源应用或轻译主进程。
+无法安全读取、辅助程序缺失或超时时，浮层提示取词失败并保留剪贴板。
+
+`./scripts/test-selection.ps1` 使用真实 Windows 编辑控件和真实外部辅助进程，
+合成选区经过拒绝备份分支、选区读取、英文比例检查，最终命中本地词典。
+它同时验证空选区、密码框、错误源窗口、取消和输出长度上限，不调用在线翻译，
+不读取用户剪贴板内容，也不改变用户窗口焦点；只记录剪贴板序列号是否保持不变。
+`./scripts/test-clipboard.ps1 -Native` 在私有 window station 中额外验证真实编辑控件的
+复制命令、原生快照恢复，以及专用格式不会被覆盖；所有数据均为合成数据。
+这些测试不等于已验证每个浏览器、Word、管理员权限窗口或远程桌面的实际兼容性。

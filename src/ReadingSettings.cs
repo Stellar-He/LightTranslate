@@ -139,9 +139,9 @@ namespace LightTranslate
 
             var translation = NewTab("翻译");
             enabled = Toggle("自动划词翻译");
-            clipboard = Toggle("通过剪贴板获取选中文字");
+            clipboard = Toggle("启用选区取词");
             translation.Children.Add(enabled); translation.Children.Add(clipboard);
-            translation.Children.Add(Help("托盘开关立即生效并同步到这里；面板修改在保存后生效。当前仅支持剪贴板取词；关闭后停止划词翻译。取词会临时复制选区；剪贴板含不支持的格式时跳过，不覆盖原内容。"));
+            translation.Children.Add(Help("托盘开关立即生效；面板修改在保存后生效。关闭取词后停止划词翻译。通常临时复制选区并恢复剪贴板；若含图片或专用数据，则尝试隔离读取选区，不改剪贴板。无法安全读取时会提示。"));
             provider = new ComboBox { ItemsSource = new[] { "自动（微软失败后腾讯）", "仅微软", "仅腾讯（中文）", "仅 DeepL（自备 API 密钥）" }, MinHeight = 32 };
             AddField(translation, "在线翻译服务", provider);
             translation.Children.Add(Help("自动模式先查本地英汉词库，再尝试微软、腾讯；指定服务会跳过词库且不自动切换。DeepL 须在 DeepL 页保存密钥；自动模式不会调用 DeepL。"));

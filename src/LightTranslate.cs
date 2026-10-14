@@ -45,6 +45,7 @@ namespace LightTranslate
                 if (args.Length > 0 && args[0] == "--self-test-clipboard-native") return ClipboardNativeTests.Run();
                 if (args.Length > 0 && args[0] == "--self-test-providers") return TranslationProviderTests.RunStandalone();
                 if (args.Length > 0 && args[0] == "--self-test-tray") return TrayIconRenderer.RunStandalone();
+                if (args.Length > 0 && args[0] == "--self-test-selection") return SelectionIntegrationTests.Run();
                 if (args.Length > 0 && args[0] == "--self-test") return SelfTest.Run(false);
                 if (args.Length > 0 && args[0] == "--self-test-offline") return SelfTest.Run(true);
                 bool created;
@@ -369,7 +370,12 @@ namespace LightTranslate
             catch (Exception ex)
             {
                 Program.Log("translate", ex.GetType().Name);
-                if (Valid(version, window)) ShowText(ex is DeepLException ? ex.Message : "暂时无法连接翻译服务", point, ex is DeepLException ? 6 : 3);
+                bool explained = ex is DeepLException || ex is SelectionUnavailableException;
+                if (Valid(version, window))
+                {
+                    anchor = point; sourceWindow = window;
+                    ShowText(explained ? ex.Message : "暂时无法连接翻译服务", point, explained ? 6 : 3);
+                }
             }
             finally
             {
@@ -690,7 +696,15 @@ namespace LightTranslate
             using (var clipboard = new NativeSelectionClipboard())
                 return await ClipboardCapture.Read(clipboard, window,
                     delegate { return !ct.IsCancellationRequested && Native.GetForegroundWindow() == window && !Native.ModifierDown(); },
-                    Native.Copy, trace, delegate { return Task.Delay(15); });
+                    Native.Copy, trace, delegate { return Task.Delay(15); }, async delegate
+                    {
+                        string text = await IsolatedSelectionReader.Read(window, ct);
+                        if (text != null && text.Length >= 65537) throw new SelectionUnavailableException("选中文字较长，请分段选择");
+                        if (!ct.IsCancellationRequested && Native.GetForegroundWindow() == window && string.IsNullOrEmpty(text))
+                            throw new SelectionUnavailableException();
+                        trace("selection helper chars=" + (text == null ? 0 : text.Length));
+                        return text;
+                    });
         }
     }
 

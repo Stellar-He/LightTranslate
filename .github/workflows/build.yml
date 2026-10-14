@@ -32,12 +32,16 @@ jobs:
       - name: Run offline self-test
         shell: pwsh
         run: ./scripts/test.ps1
+      - name: Real selection helper integration
+        shell: pwsh
+        run: ./scripts/test-selection.ps1
       - name: Upload build
         uses: actions/upload-artifact@v4
         with:
           name: LightTranslate-windows-x64
           path: |
             dist/LightTranslate/LightTranslate.exe
+            dist/LightTranslate/LightTranslate.SelectionHost.exe
             dist/LightTranslate/LightTranslate.exe.config
             dist/LightTranslate/LightTranslate.ico
             dist/LightTranslate/lexicon.dat

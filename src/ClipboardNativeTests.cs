@@ -100,6 +100,21 @@ namespace LightTranslate
                     uint html = ClipboardNative.RegisterClipboardFormat("HTML Format");
                     uint rtf = ClipboardNative.RegisterClipboardFormat("Rich Text Format");
                     uint unknown = ClipboardNative.RegisterClipboardFormat("LightTranslate unsupported fixture");
+                    // Exercise real edit-control copy on the private clipboard.
+                    // UIA integration runs separately without any clipboard payload access.
+                    using (var form = new Forms.Form())
+                    using (var edit = new Forms.TextBox { Multiline = true, Text = "prefix reversible suffix" })
+                    {
+                        form.Controls.Add(edit);
+                        IntPtr root = form.Handle, focus = edit.Handle;
+                        edit.Select(7, 10);
+                        Put(clipboard.Handle, Text("original fixture"));
+                        string capturedText = SelectionIntegrationTests.Pump(ClipboardCapture.Read(clipboard, root,
+                            delegate { return true; }, edit.Copy, delegate { }, delegate { return System.Threading.Tasks.Task.Delay(15); }));
+                        Check(capturedText == "reversible", "real edit copy -> native capture -> restore");
+                        ClipboardSnapshot checkOriginal;
+                        Check(clipboard.TrySnapshot(out checkOriginal) && checkOriginal.Formats.Any(x => x.Key == 13 && NativeSelectionClipboard.DecodeUnicode(x.Value) == "original fixture"), "real edit copy restores original");
+                    }
                     Put(clipboard.Handle, Text("original"), new KeyValuePair<uint, byte[]>(html, Encoding.UTF8.GetBytes("<b>original</b>\0")),
                         new KeyValuePair<uint, byte[]>(rtf, Encoding.ASCII.GetBytes("{\\rtf1 original}\0")));
                     ClipboardSnapshot original;

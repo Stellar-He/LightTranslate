@@ -30,14 +30,21 @@ namespace LightTranslate
         private static readonly SemaphoreSlim gate = new SemaphoreSlim(1, 1);
 
         internal static async Task<string> Read(ISelectionClipboard clipboard, IntPtr source,
-            Func<bool> valid, Action copy, Action<string> trace, Func<Task> wait)
+            Func<bool> valid, Action copy, Action<string> trace, Func<Task> wait, Func<Task<string>> withoutClipboard = null)
         {
             // Do not queue stale selections or snapshot another capture's temporary clipboard.
             if (!gate.Wait(0)) { trace("copy skipped busy"); return null; }
             try
             {
                 ClipboardSnapshot saved;
-                if (!valid() || !clipboard.TrySnapshot(out saved)) { trace("clipboard snapshot skipped"); return null; }
+                if (!valid()) return null;
+                if (!clipboard.TrySnapshot(out saved))
+                {
+                    trace("clipboard snapshot skipped");
+                    if (withoutClipboard == null || !valid()) return null;
+                    string selected = await withoutClipboard();
+                    return valid() ? selected : null;
+                }
                 if (!valid() || clipboard.Sequence != saved.Sequence) return null;
                 copy();
                 for (int i = 0; i < 12; i++)
