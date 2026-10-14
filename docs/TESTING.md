@@ -147,3 +147,31 @@ OCR、朗读、翻译历史、原位替换、AI 润色、自动更新、安装�
 13. 输入非法颜色、字号、秒数或比例，确认就地报错且不保存；取消和关闭设置不应用，重启后保留已保存的值且不改动自动翻译开关等其他设置。
 14. 打开面板后切换托盘自动翻译，再保存其他选项，确认开关不会被旧值覆盖；目标语言、选区上限、排除应用和取词开关即时应用，取消不应用。
 15. 自启验证只在隔离目录或模拟后端完成；打开、勾选、恢复配置默认值和取消均不得写入，只有保存才能修改；覆盖禁用/未知/异目标以及保存和回滚失败状态。真实用户启动项由用户自行选择，不作为自动测试动作。
+
+## Clipboard capture regression
+
+`./scripts/test-clipboard.ps1` tests capture cancellation, concurrent selections,
+snapshot/read/restore races and bounded retries without accessing the clipboard.
+`./scripts/test-clipboard.ps1 -Native` creates a private window station and desktop
+before opening a clipboard. It aborts if isolation is unavailable; it never falls
+back to the interactive clipboard. It tests exact byte preservation for Unicode,
+HTML and RTF, empty/unsupported/oversized data, busy access, stale restoration and
+delayed rendering. Both commands run in CI; neither needs the dictionary.
+
+Capture now accepts only HGLOBAL text formats (Unicode/ANSI/OEM text, locale,
+HTML Format and Rich Text Format), at most 64 formats, 8 MiB per format and
+16 MiB total. Unknown or incomplete snapshots skip the selection before Ctrl+C;
+images, file lists and application-private formats are not silently discarded.
+Delayed rendering may cause a snapshot to be skipped when its version changes.
+A slow native clipboard owner can still delay GetClipboardData. Restore checks
+the sequence while holding OpenClipboard, and preallocates every buffer before
+EmptyClipboard. Windows provides no atomic multi-format replacement; a native
+SetClipboardData failure is reported, and newer user data is never deliberately
+replaced to retry a failed restore. Cancellation leaves the current clipboard
+alone. A copy from the same source with no observable input/version distinction
+cannot be attributed with certainty; this is not a proof of clipboard ownership.
+
+The change bypasses the observed IDataObject/OLE IStream conversion crash path.
+The original native crash has not been reproduced, and the faulty format or
+provider has not been identified. These tests exercise the replacement behavior,
+not the original corrupt COM pointer.

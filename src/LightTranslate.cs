@@ -41,6 +41,8 @@ namespace LightTranslate
                     Lexicon.Build(args[1], Folder);
                     return 0;
                 }
+                if (args.Length > 0 && args[0] == "--self-test-clipboard") return ClipboardCaptureTests.RunStandalone();
+                if (args.Length > 0 && args[0] == "--self-test-clipboard-native") return ClipboardNativeTests.Run();
                 if (args.Length > 0 && args[0] == "--self-test") return SelfTest.Run(false);
                 if (args.Length > 0 && args[0] == "--self-test-offline") return SelfTest.Run(true);
                 bool created;
@@ -693,65 +695,10 @@ namespace LightTranslate
         {
             if (Native.GetForegroundWindow() != window || Native.ModifierDown()) { trace("copy skipped focus/modifier"); return null; }
             if (Native.IsPasswordFocus(window)) { trace("password field skipped"); return null; }
-            uint before = Native.GetClipboardSequenceNumber(), copied = before;
-            Forms.DataObject saved;
-            try { saved = Snapshot(Forms.Clipboard.GetDataObject()); }
-            catch (Exception ex) { trace("clipboard snapshot " + ex.GetType().Name); return null; }
-            if (Native.GetClipboardSequenceNumber() != before) return null;
-            string result = null;
-            try
-            {
-                if (Native.GetForegroundWindow() != window || ct.IsCancellationRequested) return null;
-                Native.Copy();
-                for (int i = 0; i < 12; i++)
-                {
-                    await Task.Delay(15);
-                    uint sequence = Native.GetClipboardSequenceNumber();
-                    if (sequence != before)
-                    {
-                        bool owned = Native.SameApp(Native.GetClipboardOwner(), window);
-                        trace("copy changed owner-same-app=" + owned + " canceled=" + ct.IsCancellationRequested);
-                        if (!ct.IsCancellationRequested && Native.GetForegroundWindow() == window && owned)
-                        {
-                            copied = sequence;
-                            if (Forms.Clipboard.ContainsText()) result = Forms.Clipboard.GetText();
-                        }
-                        break;
-                    }
-                    if (ct.IsCancellationRequested) break;
-                }
-                return ct.IsCancellationRequested ? null : result;
-            }
-            catch { return null; }
-            finally
-            {
-                // Do not overwrite a newer clipboard created by the user or another app.
-                if (copied != before)
-                {
-                    for (int i = 0; i < 3; i++)
-                    {
-                        if (Native.GetClipboardSequenceNumber() != copied) break;
-                        try { Forms.Clipboard.SetDataObject(saved, true); break; }
-                        catch { Thread.Sleep(10); }
-                    }
-                }
-            }
-        }
-        internal static Forms.DataObject Snapshot(Forms.IDataObject source)
-        {
-            var copy = new Forms.DataObject();
-            if (source == null) return copy;
-            foreach (string format in source.GetFormats(false))
-            {
-                var value = source.GetData(format, false);
-                var stream = value as MemoryStream;
-                var image = value as System.Drawing.Image;
-                if (stream != null) value = new MemoryStream(stream.ToArray());
-                else if (image != null) value = image.Clone();
-                else if (value is string[]) value = ((string[])value).Clone();
-                if (value != null) copy.SetData(format, false, value);
-            }
-            return copy;
+            using (var clipboard = new NativeSelectionClipboard())
+                return await ClipboardCapture.Read(clipboard, window,
+                    delegate { return !ct.IsCancellationRequested && Native.GetForegroundWindow() == window && !Native.ModifierDown(); },
+                    Native.Copy, trace, delegate { return Task.Delay(15); });
         }
     }
 
@@ -1188,14 +1135,9 @@ namespace LightTranslate
                 results["dictionaryLookupMs"] = sw.Elapsed.TotalMilliseconds;
                 results["dictionaryText"] = word;
             }
-            var original = new Forms.DataObject();
-            original.SetData(Forms.DataFormats.UnicodeText, false, "original clipboard");
-            original.SetData(Forms.DataFormats.Html, false, "<b>original</b>");
-            var snapshot = SelectionReader.Snapshot(original);
-            if ((string)snapshot.GetData(Forms.DataFormats.UnicodeText) != "original clipboard" || (string)snapshot.GetData(Forms.DataFormats.Html) != "<b>original</b>") throw new Exception("Clipboard snapshot failed");
+            ClipboardCaptureTests.Run(results);
             if (!SelectionReader.IsTerminal("pwsh") || SelectionReader.IsTerminal("Codex")) throw new Exception("Terminal guard failed");
             if (SelectionReader.HasForeignText("这是中文") || !SelectionReader.HasForeignText("Read this text")) throw new Exception("Language guard failed");
-            results["clipboardSnapshot"] = "text + HTML preserved";
             results["guards"] = "terminal + language passed";
             ReadingSettingsTests.Run(results);
             UnifiedSettingsTests.Run(results);
@@ -1209,7 +1151,6 @@ namespace LightTranslate
             }
             results["capture"] = "clipboard only; no UIAutomationClient dependency";
             results["passwordGuard"] = "native password/plain controls passed";
-            for (int i = 0; i < 100; i++) SelectionReader.Snapshot(original);
             Program.Log("self-test", "password guard passed; collecting objects");
             // OLE finalizers can marshal back to the STA: pump while awaiting them.
             var finalizers = Task.Run(delegate { GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect(); });

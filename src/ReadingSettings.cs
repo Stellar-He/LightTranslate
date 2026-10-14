@@ -136,7 +136,7 @@ namespace LightTranslate
             enabled = Toggle("自动划词翻译");
             clipboard = Toggle("通过剪贴板获取选中文字");
             translation.Children.Add(enabled); translation.Children.Add(clipboard);
-            translation.Children.Add(Help("托盘开关立即生效并同步到这里；面板修改在保存后生效。取词会临时复制选区并尝试恢复剪贴板，关闭取词后不获取选区。"));
+            translation.Children.Add(Help("托盘开关立即生效并同步到这里；面板修改在保存后生效。当前仅支持剪贴板取词；关闭后停止划词翻译。取词会临时复制选区；剪贴板含不支持的格式时跳过，不覆盖原内容。"));
             language = new ComboBox { IsEditable = true, ItemsSource = Languages, MinHeight = 32 };
             AddField(translation, "目标语言（微软）", language);
             translation.Children.Add(Help("可直接输入语言代码，如 en、ja。该选项只用于微软在线翻译；本地词库和腾讯备用仍输出中文。"));

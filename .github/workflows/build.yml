@@ -17,6 +17,12 @@ jobs:
       - name: Build application
         shell: pwsh
         run: ./build.ps1
+      - name: Clipboard workflow regression
+        shell: pwsh
+        run: ./scripts/test-clipboard.ps1
+      - name: Isolated native clipboard regression
+        shell: pwsh
+        run: ./scripts/test-clipboard.ps1 -Native
       - name: Fetch and build pinned dictionary
         shell: pwsh
         run: ./scripts/download-dictionary.ps1
