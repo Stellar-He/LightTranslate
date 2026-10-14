@@ -4,5 +4,10 @@
   "Target": "zh-Hans",
   "MaxSelectionLength": 2000,
   "ExcludedApps": [],
-  "Diagnostics": false
+  "Diagnostics": false,
+  "BubbleFontFamily": "Microsoft YaHei UI",
+  "BubbleFontSize": 14,
+  "BubbleBackground": "",
+  "AutoHideSeconds": 0,
+  "MinEnglishPercent": 0
 }
