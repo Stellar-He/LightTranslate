@@ -13,9 +13,9 @@ namespace LightTranslate
         // Real native edit controls and the real external UIA process; no user clipboard payload.
         private sealed class ProtectedClipboard : ISelectionClipboard
         {
-            internal int Copies, Reads, Restores;
+            internal int Snapshots, Copies, Reads, Restores;
             public uint Sequence { get { return 1; } }
-            public bool TrySnapshot(out ClipboardSnapshot snapshot) { snapshot = null; return false; }
+            public bool TrySnapshot(out ClipboardSnapshot snapshot) { Snapshots++; snapshot = null; return false; }
             public bool TryReadText(IntPtr source, uint expected, out uint sequence, out string text)
             { Reads++; sequence = 0; text = null; throw new Exception("Protected clipboard must not be read"); }
             public RestoreResult Restore(ClipboardSnapshot snapshot, uint expected, Func<bool> valid)
@@ -30,9 +30,11 @@ namespace LightTranslate
         }
         private static string Capture(ProtectedClipboard clipboard, IntPtr root, IntPtr focus)
         {
-            return Pump(ClipboardCapture.Read(clipboard, root, delegate { return true; },
-                delegate { clipboard.Copies++; }, delegate { }, delegate { return Task.Delay(15); },
-                async delegate { return (await IsolatedSelectionReader.ReadResult(root, CancellationToken.None, 2001, focus)).ForCapture(); }));
+            return Pump(SelectionAcquisition.Read(
+                delegate { return IsolatedSelectionReader.ReadResult(root, CancellationToken.None, 2001, focus); },
+                delegate(SelectionReadResult result) { return ClipboardCapture.Read(clipboard, root, delegate { return true; },
+                    delegate { clipboard.Copies++; }, delegate { }, delegate { return Task.Delay(15); },
+                    delegate { return Task.FromResult(result.ForCapture()); }); }, delegate { return true; }));
         }
 
         private static void ExpectFailure(SelectionReadResult result, SelectionReadState state)
@@ -66,7 +68,7 @@ namespace LightTranslate
                 }
                 edit.Text = "prefix reversible suffix"; edit.Select(7, 10);
                 ClipboardCaptureTests.Check(Capture(clipboard, root, focus) == "reversible", "normal selection still works after empty gestures");
-                ClipboardCaptureTests.Check(clipboard.Copies == 0 && clipboard.Reads == 0 && clipboard.Restores == 0, "empty gestures never copy or read stale clipboard");
+                ClipboardCaptureTests.Check(clipboard.Snapshots == 0 && clipboard.Copies == 0 && clipboard.Reads == 0 && clipboard.Restores == 0, "empty gestures never snapshot, copy or read stale clipboard");
             }
         }
         internal static int Run()
@@ -112,7 +114,7 @@ namespace LightTranslate
                     ClipboardCaptureTests.Check(stopped, "canceled selection rejected");
                 }
             }
-            results["selectionIntegration"] = "real Windows edit selection -> external UIA helper -> protected clipboard fallback -> language gate -> local dictionary; empty/password/wrong-root/canceled/length cases passed; no network or clipboard contents accessed";
+            results["selectionIntegration"] = "real Windows edit selection -> external UIA helper -> context gate -> language gate -> local dictionary; empty/password/wrong-root/canceled/length cases passed; no network or clipboard contents accessed";
             results["emptySelectionCases"] = emptyCases;
             results["failureClassification"] = "unsupported, deadline, provider error, nonzero exit with empty status, unknown status retain errors; successful empty selections are silent";
             results["clipboardSequenceUnchanged"] = before == Native.GetClipboardSequenceNumber();

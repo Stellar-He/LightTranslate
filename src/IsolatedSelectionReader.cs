@@ -11,9 +11,9 @@ namespace LightTranslate
 {
     internal sealed class SelectionUnavailableException : Exception
     {
-        internal SelectionUnavailableException(string message = "剪贴板无法安全备份，已保留原内容；当前应用暂时无法读取选区。") : base(message) { }
+        internal SelectionUnavailableException(string message = "当前应用暂时无法读取选区，已保留剪贴板原内容。") : base(message) { }
     }
-    internal enum SelectionReadState { Selected, Empty, Unsupported, Blocked, Timeout, Failed }
+    internal enum SelectionReadState { Selected, Empty, NonText, Unsupported, TextUnsupported, Blocked, Timeout, Failed }
     internal sealed class SelectionReadResult
     {
         internal SelectionReadState State;
@@ -21,10 +21,30 @@ namespace LightTranslate
         internal SelectionReadResult(SelectionReadState state, string text = null) { State = state; Text = text; }
         internal string ForCapture()
         {
-            if (State == SelectionReadState.Empty || State == SelectionReadState.Blocked) return string.Empty;
+            if (State == SelectionReadState.Empty || State == SelectionReadState.NonText || State == SelectionReadState.Blocked) return string.Empty;
             if (State != SelectionReadState.Selected) throw new SelectionUnavailableException();
             if (Text.Length >= 65537) throw new SelectionUnavailableException("选中文字较长，请分段选择");
             return Text;
+        }
+    }
+    internal static class SelectionAcquisition
+    {
+        private static readonly SemaphoreSlim gate = new SemaphoreSlim(1, 1);
+        internal static async Task<string> Read(Func<Task<SelectionReadResult>> inspect,
+            Func<SelectionReadResult, Task<string>> textFallback, Func<bool> valid)
+        {
+            if (!gate.Wait(0)) return null;
+            try
+            {
+                if (!valid()) return null;
+                SelectionReadResult result = await inspect();
+                if (!valid()) return null;
+                // Clipboard access requires positive evidence of a text context. UIA failures
+                // and item selection must never send Ctrl+C to a list or stale focused control.
+                if (result.State == SelectionReadState.TextUnsupported) return await textFallback(result);
+                return result.ForCapture();
+            }
+            finally { gate.Release(); }
         }
     }
     internal static class IsolatedSelectionReader
@@ -39,6 +59,8 @@ namespace LightTranslate
             if (status == "password") return new SelectionReadResult(SelectionReadState.Blocked, string.Empty);
             if (text.Length != 0 && status == "selected") return new SelectionReadResult(SelectionReadState.Selected, text);
             if (text.Length == 0 && status == "empty-selection") return new SelectionReadResult(SelectionReadState.Empty, string.Empty);
+            if (text.Length == 0 && status == "non-text") return new SelectionReadResult(SelectionReadState.NonText, string.Empty);
+            if (status == "text-unsupported") return new SelectionReadResult(SelectionReadState.TextUnsupported);
             if (status == "no-text-pattern") return new SelectionReadResult(SelectionReadState.Unsupported);
             return new SelectionReadResult(SelectionReadState.Failed);
         }
@@ -72,7 +94,7 @@ namespace LightTranslate
                     if (!exited) { Program.Log("selection-helper", "wait-timeout"); return new SelectionReadResult(SelectionReadState.Timeout); }
                     string status = (await diagnostic).Trim();
                     // Only fixed status codes enter logs, never provider text or selected content.
-                    if (status != "selected" && status != "no-text-pattern" && status != "empty-selection" && status != "password"
+                    if (status != "selected" && status != "no-text-pattern" && status != "text-unsupported" && status != "non-text" && status != "empty-selection" && status != "password"
                         && status != "wrong-root" && status != "deadline" && status != "provider-error" && status != "depth-limit") status = "unknown";
                     if (process.ExitCode != 0) Program.Log("selection-helper", "exit=" + process.ExitCode + " status=" + status);
                     string text = await output;

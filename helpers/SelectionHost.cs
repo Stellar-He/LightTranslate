@@ -41,9 +41,9 @@ internal static class SelectionHost
             }
             // null means unsupported/unresolved; empty means a successful, authoritative
             // empty selection. Do not replace an empty pointer selection with stale focus text.
-            if (text == null) text = Read(element, maximum);
+            if (text == null && status != "text-unsupported") text = ReadAncestors(element, root, maximum);
             // Browsers can expose their actual focused document below the native HWND.
-            if (text == null && GetForegroundWindow() == root)
+            if (text == null && status != "text-unsupported" && GetForegroundWindow() == root)
             {
                 var focused = AutomationElement.FocusedElement;
                 if (focused != null && !focused.Current.IsPassword && BelongsTo(focused, root))
@@ -64,17 +64,54 @@ internal static class SelectionHost
     {
         // Chromium can put many layout groups between focus and its Document.
         // Stay within the source window, with a depth bound and process deadline.
+        bool itemSurface = false;
         for (int i = 0; i < 32 && element != null; i++)
         {
             if (element.Current.IsPassword) { status = "password"; return null; }
-            if (!BelongsTo(element, root)) return null;
-            string text = Read(element, maximum);
-            if (text != null) return text;
-            if (element.Current.NativeWindowHandle == root.ToInt64()) return null;
+            if (!BelongsTo(element, root))
+            {
+                // Shell UIA trees may skip the native WorkerW root. Once traversal
+                // leaves our source window, an already identified item surface is final.
+                if (itemSurface) { status = "non-text"; return string.Empty; }
+                return null;
+            }
+            ControlType type = element.Current.ControlType;
+            // An inline rename Edit remains text even when its parent is an icon list.
+            // A web list can belong to a selectable Document: do not blacklist its app.
+            if (type == ControlType.Edit || type == ControlType.Document)
+            {
+                string text = Read(element, maximum);
+                if (text == null) status = "text-unsupported";
+                return text;
+            }
+            itemSurface |= IsItemSurface(element, type);
+            if (!itemSurface)
+            {
+                string text = Read(element, maximum);
+                if (text != null) return text;
+            }
+            if (element.Current.NativeWindowHandle == root.ToInt64())
+            {
+                if (itemSurface) { status = "non-text"; return string.Empty; }
+                return null;
+            }
             element = TreeWalker.ControlViewWalker.GetParent(element);
         }
         if (element != null) status = "depth-limit";
+        else if (itemSurface) { status = "non-text"; return string.Empty; }
         return null;
+    }
+    private static bool IsItemSurface(AutomationElement element, ControlType type)
+    {
+        if (type == ControlType.List || type == ControlType.ListItem || type == ControlType.Tree || type == ControlType.TreeItem
+            || type == ControlType.DataGrid || type == ControlType.DataItem || type == ControlType.Header || type == ControlType.HeaderItem
+            || type == ControlType.Button || type == ControlType.CheckBox || type == ControlType.RadioButton || type == ControlType.ComboBox
+            || type == ControlType.ScrollBar || type == ControlType.Slider || type == ControlType.Menu || type == ControlType.MenuItem
+            || type == ControlType.Tab || type == ControlType.TabItem || type == ControlType.ToolBar || type == ControlType.Image
+            || type == ControlType.Separator || type == ControlType.ProgressBar) return true;
+        object pattern;
+        return element.TryGetCurrentPattern(SelectionPattern.Pattern, out pattern)
+            || element.TryGetCurrentPattern(SelectionItemPattern.Pattern, out pattern);
     }
     private static bool BelongsTo(AutomationElement element, IntPtr root)
     {

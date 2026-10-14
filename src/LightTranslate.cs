@@ -46,6 +46,7 @@ namespace LightTranslate
                 if (args.Length > 0 && args[0] == "--self-test-providers") return TranslationProviderTests.RunStandalone();
                 if (args.Length > 0 && args[0] == "--self-test-tray") return TrayIconRenderer.RunStandalone();
                 if (args.Length > 0 && args[0] == "--self-test-gestures") return SelectionGestureTests.Run();
+                if (args.Length > 0 && args[0] == "--self-test-selection-context") return SelectionContextTests.Run();
                 if (args.Length > 0 && args[0] == "--self-test-selection") return SelectionIntegrationTests.Run();
                 if (args.Length > 0 && args[0] == "--self-test") return SelfTest.Run(false);
                 if (args.Length > 0 && args[0] == "--self-test-offline") return SelfTest.Run(true);
@@ -218,7 +219,7 @@ namespace LightTranslate
             timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
             timer.Tick += delegate { CheckDismissal(); FlushDiagnostics(); };
             timer.Start();
-            Program.Log("started", "hooks=dedicated-thread recovery=enabled capture=clipboard dictionary=" + lexicon.Count);
+            Program.Log("started", "hooks=dedicated-thread recovery=enabled capture=isolated-context clipboard=text-fallback dictionary=" + lexicon.Count);
         }
 
         private void OpenSettings()
@@ -341,11 +342,11 @@ namespace LightTranslate
             {
                 await Task.Delay(25, ct);
                 if (!Valid(version, window)) return;
-                // Capture through the clipboard without UIAutomationClient handles.
-                // Native UIA pattern finalizers caused an access violation during testing.
+                // Inspect text context in the isolated helper before any clipboard access.
+                // The main process never owns UIAutomationClient objects.
                 if (!settings.ClipboardFallback || SelectionReader.IsTerminal(processName)) return;
                 string text = await SelectionReader.CopySelection(window, ct, Trace, point);
-                Trace("clipboard chars=" + (text == null ? 0 : text.Length));
+                Trace("selection chars=" + (text == null ? 0 : text.Length));
                 if (!Valid(version, window) || string.IsNullOrWhiteSpace(text)) { Trace("selection discarded valid=" + Valid(version, window)); return; }
                 text = text.Trim();
                 if (!SelectionReader.ShouldTranslate(text, settings.MinEnglishPercent)) { Trace("selection language threshold skipped"); return; }
@@ -699,17 +700,15 @@ namespace LightTranslate
         {
             if (Native.GetForegroundWindow() != window || Native.ModifierDown()) { trace("copy skipped focus/modifier"); return null; }
             if (Native.IsPasswordFocus(window)) { trace("password field skipped"); return null; }
-            using (var clipboard = new NativeSelectionClipboard())
-                return await ClipboardCapture.Read(clipboard, window,
-                    delegate { return !ct.IsCancellationRequested && Native.GetForegroundWindow() == window && !Native.ModifierDown(); },
-                    Native.Copy, trace, delegate { return Task.Delay(15); }, async delegate
-                    {
-                        SelectionReadResult result = await IsolatedSelectionReader.ReadResult(window, ct, point: point);
-                        if (ct.IsCancellationRequested || Native.GetForegroundWindow() != window) return null;
-                        string text = result.ForCapture();
-                        trace("selection helper chars=" + (text == null ? 0 : text.Length));
-                        return text;
-                    });
+            Func<bool> valid = delegate { return !ct.IsCancellationRequested && Native.GetForegroundWindow() == window && !Native.ModifierDown(); };
+            return await SelectionAcquisition.Read(
+                delegate { return IsolatedSelectionReader.ReadResult(window, ct, point: point); },
+                async delegate(SelectionReadResult result)
+                {
+                    using (var clipboard = new NativeSelectionClipboard())
+                        return await ClipboardCapture.Read(clipboard, window, valid, Native.Copy, trace,
+                            delegate { return Task.Delay(15); }, delegate { return Task.FromResult(result.ForCapture()); });
+                }, valid);
         }
     }
 

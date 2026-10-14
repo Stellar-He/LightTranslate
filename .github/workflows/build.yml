@@ -23,6 +23,9 @@ jobs:
       - name: Native window gesture boundaries
         shell: pwsh
         run: ./scripts/test-gestures.ps1
+      - name: Non-text selection contexts
+        shell: pwsh
+        run: ./scripts/test-selection-context.ps1
       - name: Translation providers and DeepL offline regression
         shell: pwsh
         run: ./scripts/test-providers.ps1
