@@ -105,7 +105,7 @@ namespace LightTranslate
         private readonly TextBlock deepLStatus;
         private bool clearDeepLKey;
         private readonly CheckBox enabled, clipboard, autoStart;
-        private readonly ComboBox language, provider, fontFamily, fontSize, autoHide;
+        private readonly ComboBox language, provider, indexModel, fontFamily, fontSize, autoHide;
         private readonly TextBox maxSelection, excludedApps, background, englishPercent;
         private readonly TextBlock error, previewText, startupStatus;
         private readonly Border preview;
@@ -142,12 +142,15 @@ namespace LightTranslate
             clipboard = Toggle("启用选区取词");
             translation.Children.Add(enabled); translation.Children.Add(clipboard);
             translation.Children.Add(Help("托盘开关立即生效；面板修改在保存后生效。关闭取词后停止划词翻译。通常临时复制选区并恢复剪贴板；若含图片或专用数据，则尝试隔离读取选区，不改剪贴板。无法安全读取时会提示。"));
-            provider = new ComboBox { ItemsSource = new[] { "自动（微软失败后腾讯）", "仅微软", "仅腾讯（中文）", "仅 DeepL（自备 API 密钥）" }, MinHeight = 32 };
+            provider = new ComboBox { ItemsSource = new[] { "自动（微软失败后腾讯）", "仅微软", "仅腾讯（中文）", "仅 DeepL（自备 API 密钥）", "仅哔哩哔哩 Index" }, MinHeight = 32 };
             AddField(translation, "在线翻译服务", provider);
             translation.Children.Add(Help("自动模式先查本地英汉词库，再尝试微软、腾讯；指定服务会跳过词库且不自动切换。DeepL 须在 DeepL 页保存密钥；自动模式不会调用 DeepL。"));
+            indexModel = new ComboBox { ItemsSource = IndexTranslator.Models, MinHeight = 32 };
+            AddField(translation, "Index 模型", indexModel);
+            translation.Children.Add(Help("仅 Index 使用：2B / 9B / 35B。选中文字会直发哔哩哔哩公开接口，无需密钥；不自动换模型。三档见官方文档，在线可用性以实际请求为准。"));
             language = new ComboBox { IsEditable = true, ItemsSource = Languages, MinHeight = 32 };
             AddField(translation, "目标语言", language);
-            translation.Children.Add(Help("可直接输入服务支持的语言代码，如 en、ja。DeepL 简繁中文分别使用 ZH-HANS、ZH-HANT。词库和腾讯固定输出中文。"));
+            translation.Children.Add(Help("可直接输入服务支持的语言代码，如 en、ja。Index 按 zh-Hans / zh-Hant 指定简体 / 繁體中文；DeepL 对应 ZH-HANS / ZH-HANT。词库和腾讯固定输出中文。"));
             maxSelection = Input();
             AddField(translation, "选区字符数上限", maxSelection);
             translation.Children.Add(Help("正整数，默认 2,000。超过上限只提示分段选择，不发送该选区。"));
@@ -228,7 +231,7 @@ namespace LightTranslate
             save.Click += delegate { Apply(Path.Combine(Program.Folder, "settings.json")); }; right.Children.Add(save);
             Grid.SetColumn(right, 1); actions.Children.Add(right); footer.Children.Add(actions);
             Grid.SetRow(footer, 2); layout.Children.Add(footer);
-            provider.SelectionChanged += delegate { language.IsEnabled = provider.SelectedIndex != 2; };
+            provider.SelectionChanged += delegate { language.IsEnabled = provider.SelectedIndex != 2; indexModel.IsEnabled = provider.SelectedIndex == 4; };
             fontFamily.SelectionChanged += delegate { UpdatePreview(); };
             fontSize.AddHandler(System.Windows.Controls.Primitives.TextBoxBase.TextChangedEvent, new TextChangedEventHandler(delegate { UpdatePreview(); }));
             background.TextChanged += delegate { UpdatePreview(); };
@@ -269,7 +272,9 @@ namespace LightTranslate
         {
             if (error != null) error.Visibility = Visibility.Collapsed;
             enabled.IsChecked = value.Enabled; clipboard.IsChecked = value.ClipboardFallback;
-            provider.SelectedIndex = value.TranslationProvider == "microsoft" ? 1 : value.TranslationProvider == "tencent" ? 2 : value.TranslationProvider == "deepl" ? 3 : 0;
+            provider.SelectedIndex = value.TranslationProvider == "microsoft" ? 1 : value.TranslationProvider == "tencent" ? 2 : value.TranslationProvider == "deepl" ? 3 : value.TranslationProvider == "index" ? 4 : 0;
+            indexModel.SelectedItem = value.IndexModel;
+            indexModel.IsEnabled = provider.SelectedIndex == 4;
             deepLKey.Clear(); clearDeepLKey = false; RefreshDeepLStatus();
             language.Text = LanguageLabel(value.Target);
             maxSelection.Text = value.MaxSelectionLength.ToString(CultureInfo.CurrentCulture);
@@ -340,7 +345,10 @@ namespace LightTranslate
                 return Invalid("最低英文占比请输入 0–100 的整数百分比。", englishPercent, 0);
             var next = settings.Clone();
             next.Enabled = enabled.IsChecked == true; next.ClipboardFallback = clipboard.IsChecked == true;
-            next.TranslationProvider = provider.SelectedIndex == 1 ? "microsoft" : provider.SelectedIndex == 2 ? "tencent" : provider.SelectedIndex == 3 ? "deepl" : "auto";
+            next.TranslationProvider = provider.SelectedIndex == 1 ? "microsoft" : provider.SelectedIndex == 2 ? "tencent" : provider.SelectedIndex == 3 ? "deepl" : provider.SelectedIndex == 4 ? "index" : "auto";
+            if (provider.SelectedIndex == 4 && !IndexTranslator.ValidModel(indexModel.SelectedItem as string))
+                return Invalid("请选择 Index 模型：2B、9B 或 35B。", indexModel, 0);
+            next.IndexModel = indexModel.SelectedItem as string ?? settings.IndexModel;
             if (provider.SelectedIndex != 2 && language.Text != LanguageLabel(settings.Target))
             {
                 string choice = Languages.FirstOrDefault(x => x == language.Text);
@@ -348,6 +356,11 @@ namespace LightTranslate
                 if (!System.Text.RegularExpressions.Regex.IsMatch(code, "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$"))
                     return Invalid("请选择目标语言，或输入语言代码，例如 zh-Hans、en、ja。", language, 0);
                 next.Target = code;
+            }
+            if (provider.SelectedIndex == 4)
+            {
+                try { IndexTranslator.TargetName(next.Target); }
+                catch (IndexException ex) { return Invalid(ex.Message, language, 0); }
             }
             if (maxSelection.Text != settings.MaxSelectionLength.ToString(CultureInfo.CurrentCulture))
             {
@@ -432,6 +445,9 @@ namespace LightTranslate
         internal bool DeepLInputEmptyForTest { get { return deepLKey.Password.Length == 0; } }
         internal void SetProviderForTest(int value) { provider.SelectedIndex = value; }
         internal int ProviderForTest { get { return provider.SelectedIndex; } }
+        internal void SetIndexModelForTest(string value) { indexModel.SelectedItem = value; }
+        internal string IndexModelForTest { get { return indexModel.SelectedItem as string; } }
+        internal bool IndexModelEnabledForTest { get { return indexModel.IsEnabled; } }
         internal bool TargetEnabledForTest { get { return language.IsEnabled; } }
         internal void SetStartupForTest(bool value) { autoStart.IsChecked = value; }
         internal bool EnabledForTest { get { return enabled.IsChecked == true; } }

@@ -44,6 +44,8 @@ namespace LightTranslate
                 if (args.Length > 0 && args[0] == "--self-test-clipboard") return ClipboardCaptureTests.RunStandalone();
                 if (args.Length > 0 && args[0] == "--self-test-clipboard-native") return ClipboardNativeTests.Run();
                 if (args.Length > 0 && args[0] == "--self-test-providers") return TranslationProviderTests.RunStandalone();
+                if (args.Length > 0 && args[0] == "--self-test-index") return IndexTests.RunStandalone();
+                if (args.Length > 0 && args[0] == "--test-index-live") return IndexTests.RunLive();
                 if (args.Length > 0 && args[0] == "--self-test-tray") return TrayIconRenderer.RunStandalone();
                 if (args.Length > 0 && args[0] == "--self-test-gestures") return SelectionGestureTests.Run();
                 if (args.Length > 0 && args[0] == "--self-test-selection-context") return SelectionContextTests.Run();
@@ -89,6 +91,7 @@ namespace LightTranslate
         public bool ClipboardFallback = true;
         public string Target = "zh-Hans";
         public string TranslationProvider = "auto";
+        public string IndexModel = IndexTranslator.DefaultModel;
         public int MaxSelectionLength = 2000;
         public string[] ExcludedApps = new string[0];
         public bool Diagnostics = false;
@@ -116,6 +119,7 @@ namespace LightTranslate
         internal void NormalizeReading()
         {
             TranslationProvider = Translator.NormalizeProvider(TranslationProvider);
+            if (string.IsNullOrWhiteSpace(IndexModel)) IndexModel = IndexTranslator.DefaultModel;
             BubbleFontFamily = BubbleAppearance.ResolveFont(BubbleFontFamily).Source;
             if (double.IsNaN(BubbleFontSize) || double.IsInfinity(BubbleFontSize) || BubbleFontSize < 10 || BubbleFontSize > 48) BubbleFontSize = 14;
             Color color;
@@ -135,6 +139,7 @@ namespace LightTranslate
         {
             Enabled = other.Enabled; ClipboardFallback = other.ClipboardFallback;
             Target = other.Target; TranslationProvider = other.TranslationProvider; MaxSelectionLength = other.MaxSelectionLength;
+            IndexModel = other.IndexModel;
             ExcludedApps = other.ExcludedApps == null ? null : (string[])other.ExcludedApps.Clone();
             CopyReadingFrom(other);
             if (Changed != null) Changed();
@@ -362,15 +367,16 @@ namespace LightTranslate
                 }
                 string provider = Translator.NormalizeProvider(settings.TranslationProvider);
                 string target = settings.Target;
+                string model = settings.IndexModel;
                 string translated = provider == "auto" ? lexicon.Lookup(text) : null;
-                if (translated != null || translator.TryCached(text, target, out translated, provider))
+                if (translated != null || translator.TryCached(text, target, out translated, provider, model))
                 {
                     ShowText(translated, point, ReadingSeconds(translated), true);
                     return;
                 }
-                var request = translator.Translate(text, target, ct, provider);
+                var request = translator.Translate(text, target, ct, provider, model);
                 if (await Task.WhenAny(request, Task.Delay(220, ct)) != request && Valid(version, window))
-                    ShowText("…", point, 8);
+                    ShowText("…", point, provider == "index" ? 62 : 8);
                 translated = await request;
                 if (!Valid(version, window)) return;
                 ShowText(translated, point, ReadingSeconds(translated), true);
@@ -379,7 +385,7 @@ namespace LightTranslate
             catch (Exception ex)
             {
                 Program.Log("translate", ex.GetType().Name);
-                bool explained = ex is DeepLException || ex is SelectionUnavailableException;
+                bool explained = ex is DeepLException || ex is IndexException || ex is SelectionUnavailableException;
                 if (Valid(version, window))
                 {
                     anchor = point; sourceWindow = window;
@@ -931,13 +937,15 @@ namespace LightTranslate
     {
         private readonly HttpClient http;
         private readonly DeepLTranslator deepl;
+        private readonly IndexTranslator index;
         private readonly JavaScriptSerializer json = new JavaScriptSerializer();
         private readonly Dictionary<string, string> cache = new Dictionary<string, string>();
         private readonly Queue<string> eviction = new Queue<string>();
         public Translator() : this(null) { }
-        internal Translator(HttpMessageHandler handler, IDeepLCredentials credentials = null, HttpMessageHandler deepLHandler = null)
+        internal Translator(HttpMessageHandler handler, IDeepLCredentials credentials = null, HttpMessageHandler deepLHandler = null, HttpMessageHandler indexHandler = null)
         {
             deepl = new DeepLTranslator(credentials ?? DeepLCredentials.Current(), deepLHandler);
+            index = new IndexTranslator(indexHandler);
             http = handler == null ? new HttpClient() : new HttpClient(handler);
             http.Timeout = TimeSpan.FromSeconds(7);
             http.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
@@ -953,23 +961,24 @@ namespace LightTranslate
             catch { }
         }
         internal static string NormalizeProvider(string provider)
-        { return provider == "microsoft" || provider == "tencent" || provider == "deepl" ? provider : "auto"; }
-        private static string CacheKey(string text, string target, string provider)
-        { return NormalizeProvider(provider) + "\n" + (provider == "tencent" ? "zh" : target) + "\n" + text; }
-        public bool TryCached(string text, string target, out string result, string provider = "auto")
+        { return provider == "microsoft" || provider == "tencent" || provider == "deepl" || provider == "index" ? provider : "auto"; }
+        private static string CacheKey(string text, string target, string provider, string model)
+        { return new JavaScriptSerializer().Serialize(new[] { NormalizeProvider(provider), provider == "index" ? model : "", provider == "tencent" ? "zh" : target, text }); }
+        public bool TryCached(string text, string target, out string result, string provider = "auto", string model = IndexTranslator.DefaultModel)
         {
             // DeepL validates the current credential before consulting its separate cache.
             if (provider == "deepl") { result = null; return false; }
-            return cache.TryGetValue(CacheKey(text, target, provider), out result);
+            lock (cache) return cache.TryGetValue(CacheKey(text, target, provider, model), out result);
         }
-        public async Task<string> Translate(string text, string target, CancellationToken ct, string provider = "auto")
+        public async Task<string> Translate(string text, string target, CancellationToken ct, string provider = "auto", string model = IndexTranslator.DefaultModel)
         {
             ct.ThrowIfCancellationRequested();
             provider = NormalizeProvider(provider);
             if (provider == "deepl") return await deepl.Translate(text, target, ct);
             string result;
-            if (TryCached(text, target, out result, provider)) return result;
-            if (provider == "tencent") result = await Tencent(text, ct);
+            if (TryCached(text, target, out result, provider, model)) return result;
+            if (provider == "index") result = await index.Translate(text, target, model, ct);
+            else if (provider == "tencent") result = await Tencent(text, ct);
             else if (provider == "microsoft") result = await Microsoft(text, target, ct);
             else
             {
@@ -982,12 +991,16 @@ namespace LightTranslate
             }
             if (string.IsNullOrWhiteSpace(result)) throw new InvalidDataException("Empty translation");
             ct.ThrowIfCancellationRequested();
-            string key = CacheKey(text, target, provider);
-            if (!cache.ContainsKey(key))
+            string key = CacheKey(text, target, provider, model);
+            lock (cache)
             {
-                if (cache.Count >= 256) cache.Remove(eviction.Dequeue());
-                cache[key] = result;
-                eviction.Enqueue(key);
+                ct.ThrowIfCancellationRequested();
+                if (!cache.ContainsKey(key))
+                {
+                    if (cache.Count >= 256) cache.Remove(eviction.Dequeue());
+                    cache[key] = result;
+                    eviction.Enqueue(key);
+                }
             }
             return result;
         }
@@ -1038,7 +1051,7 @@ namespace LightTranslate
             using (var hmac = new HMACSHA256(key))
                 return "MSTranslatorAndroidApp::" + Convert.ToBase64String(hmac.ComputeHash(Encoding.UTF8.GetBytes(value))) + "::" + date + "::" + guid;
         }
-        public void Dispose() { http.Dispose(); deepl.Dispose(); }
+        public void Dispose() { http.Dispose(); deepl.Dispose(); index.Dispose(); }
     }
 
     internal static class Native
