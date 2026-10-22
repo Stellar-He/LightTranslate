@@ -45,6 +45,7 @@ namespace LightTranslate
         internal static void Run(Dictionary<string, object> results)
         {
             DeepLTests.Run(results);
+            IndexTests.Run(results);
             var handler = new Handler();
             using (var translator = new Translator(handler))
             {

@@ -81,7 +81,10 @@ pwsh -File .\startup.ps1 -Remove
 
 ## 文字如何处理
 
-默认自动模式先查询本地词库，未命中时发送给微软翻译，失败后尝试腾讯；自动模式不会调用 DeepL。明确选择微软、腾讯或 DeepL 会跳过词库，只请求所选服务，失败不会自动切换。
+默认自动模式先查询本地词库，未命中时发送给微软翻译，失败后尝试腾讯；自动模式不会调用 DeepL 或 Index。明确选择微软、腾讯、DeepL 或 Index 会跳过词库，只请求所选服务，失败不会自动切换。
+选择“仅哔哩哔哩 Index”后，可在模型下拉中选择 `Index-Translate-2B`、`Index-Translate-9B` 或 `Index-Translate-35B-A3B`。模型选择随设置保存和回填；旧配置仍保留原服务，仅增加默认模型值 35B，不会自动启用 Index。三档来自[官方说明](https://github.com/bilibili/Index-Translate/blob/main/docs/image_translate_zh.md)，在线服务可用性可能变化。
+Index 直接以 C# HTTP 调用 `https://index-translate.bilibili.com/v1/chat/completions`，不需要密钥或本地代理。选中文字会发送给哔哩哔哩；程序不记录选区或响应正文。目标语言 `zh-Hans` / `zh-Hant` 分别指定简体 / 繁體中文。缓存按服务、模型、目标语言和原文隔离；切换设置会取消等待中的翻译。
+Index 单次翻译总期限为 60 秒，429 最多尝试三次，按 Retry-After 或递增间隔等待；服务要求等待超过 10 秒时提示稍后重试并保留冷却期。取消与过期结果会丢弃，超时、限流、模型不可用和异常响应都有明确提示；不会静默更换模型。返回模型标识与选择不符时也会拒绝显示结果。
 选择 DeepL 并保存密钥后，选中文字将发送给 DeepL，可能按账户套餐计费；未配置密钥时不请求 DeepL。只使用官方 `POST /v2/translate`，按密钥的 `:fx` 标记选择 `api-free.deepl.com`，其余使用 `api.deepl.com`，不接受自定义地址或 HTTP 重定向。简繁中文对应 `ZH-HANS`、`ZH-HANT`。
 额度和费用以 [DeepL 当前 API 套餐](https://support.deepl.com/hc/en-us/articles/360021200939-DeepL-API-plans) 为准；不内置任何每月免费额度承诺。认证、额度、限流和超时会显示各自提示，不自动重试计费请求。
 译文缓存保存在当前进程内，退出后清空。程序默认不记录选区原文或用户译文。

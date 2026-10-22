@@ -26,7 +26,7 @@ jobs:
       - name: Non-text selection contexts
         shell: pwsh
         run: ./scripts/test-selection-context.ps1
-      - name: Translation providers and DeepL offline regression
+      - name: Translation providers, DeepL and Index offline regression
         shell: pwsh
         run: ./scripts/test-providers.ps1
       - name: Isolated native clipboard regression

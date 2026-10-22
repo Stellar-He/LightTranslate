@@ -3,6 +3,7 @@
   "ClipboardFallback": true,
   "Target": "zh-Hans",
   "TranslationProvider": "auto",
+  "IndexModel": "Index-Translate-35B-A3B",
   "MaxSelectionLength": 2000,
   "ExcludedApps": [],
   "Diagnostics": false,
